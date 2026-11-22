@@ -1,0 +1,17 @@
+{
+  "id": "KAGGLE_USERNAME_PLACEHOLDER/omniai-wan21-dual-gpu-worker",
+  "title": "OmniAI Wan2.1 Dual-GPU Video Worker",
+  "code_file": "video_worker.py",
+  "language": "python",
+  "kernel_type": "script",
+  "is_private": true,
+  "enable_gpu": true,
+  "enable_tpu": false,
+  "enable_internet": true,
+  "dataset_sources": [
+    "KAGGLE_USERNAME_PLACEHOLDER/video-tasks-input"
+  ],
+  "competition_sources": [],
+  "kernel_sources": [],
+  "model_sources": []
+}

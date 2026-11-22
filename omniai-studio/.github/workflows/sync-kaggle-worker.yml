@@ -1,0 +1,62 @@
+name: Sync Kaggle Dual-GPU Video Worker
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'kaggle_worker/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sync-kaggle:
+    name: Push Wan 2.1 Dual-GPU Worker to Kaggle
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Monorepo
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Kaggle CLI
+        run: |
+          python -m pip install --upgrade pip
+          pip install kaggle==1.6.17
+
+      - name: Configure Kaggle Credentials & Inject Username
+        env:
+          KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
+          KAGGLE_KEY: ${{ secrets.KAGGLE_KEY }}
+        run: |
+          if [[ -z "$KAGGLE_USERNAME" || -z "$KAGGLE_KEY" ]]; then
+            echo "::error::Missing KAGGLE_USERNAME or KAGGLE_KEY repository secrets."
+            exit 1
+          fi
+          mkdir -p ~/.kaggle
+          python3 - <<'PY'
+          import json, os, pathlib
+
+          username = os.environ["KAGGLE_USERNAME"]
+          key = os.environ["KAGGLE_KEY"]
+
+          cred_path = pathlib.Path.home() / ".kaggle" / "kaggle.json"
+          cred_path.write_text(json.dumps({"username": username, "key": key}))
+          cred_path.chmod(0o600)
+
+          meta_path = pathlib.Path("kaggle_worker/kernel-metadata.json")
+          meta = json.loads(meta_path.read_text(encoding="utf-8"))
+          meta["id"] = f"{username}/omniai-wan21-dual-gpu-worker"
+          meta["dataset_sources"] = [f"{username}/video-tasks-input"]
+          meta_path.write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
+          print("Injected Kaggle metadata ID:", meta["id"])
+          PY
+
+      - name: Push Kernel to Kaggle
+        run: kaggle kernels push -p kaggle_worker

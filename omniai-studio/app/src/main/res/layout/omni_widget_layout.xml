@@ -1,0 +1,94 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/widget_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#0A0A0F"
+    android:orientation="vertical"
+    android:padding="12dp">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
+
+        <TextView
+            android:id="@+id/widget_title"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:ellipsize="end"
+            android:maxLines="1"
+            android:text="OmniAI Studio v4.5"
+            android:textColor="#00E676"
+            android:textSize="13sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/widget_gpu_hours"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="30.0h GPU left"
+            android:textColor="#00E5FF"
+            android:textSize="11sp"
+            android:textStyle="bold" />
+    </LinearLayout>
+
+    <TextView
+        android:id="@+id/widget_render_status"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:ellipsize="end"
+        android:maxLines="1"
+        android:text="Render Queue: Idle"
+        android:textColor="#E0E4EC"
+        android:textSize="12sp" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="10dp"
+        android:orientation="horizontal">
+
+        <Button
+            android:id="@+id/widget_btn_voice_chat"
+            android:layout_width="0dp"
+            android:layout_height="36dp"
+            android:layout_marginEnd="6dp"
+            android:layout_weight="1"
+            android:backgroundTint="#00E676"
+            android:text="Voice Chat"
+            android:textAllCaps="false"
+            android:textColor="#000000"
+            android:textSize="11sp"
+            android:textStyle="bold" />
+
+        <Button
+            android:id="@+id/widget_btn_director"
+            android:layout_width="0dp"
+            android:layout_height="36dp"
+            android:layout_marginEnd="6dp"
+            android:layout_weight="1"
+            android:backgroundTint="#1E2433"
+            android:text="Director"
+            android:textAllCaps="false"
+            android:textColor="#FFFFFF"
+            android:textSize="11sp"
+            android:textStyle="bold" />
+
+        <Button
+            android:id="@+id/widget_btn_projects"
+            android:layout_width="0dp"
+            android:layout_height="36dp"
+            android:layout_weight="1"
+            android:backgroundTint="#00B0FF"
+            android:text="Projects"
+            android:textAllCaps="false"
+            android:textColor="#000000"
+            android:textSize="11sp"
+            android:textStyle="bold" />
+    </LinearLayout>
+
+</LinearLayout>

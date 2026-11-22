@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">OmniAI-Studio</string>
+    <string name="widget_description">Active Kaggle render status, weekly GPU hours remaining, and quick-launch controls for Voice Chat and Video Director.</string>
+</resources>

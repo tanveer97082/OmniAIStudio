@@ -1,0 +1,38 @@
+@import "tailwindcss";
+@custom-variant dark (&:where(.dark, .dark *));
+
+@layer base {
+  :root {
+    --font-sans: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+    --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, monospace;
+  }
+
+  body {
+    font-family: var(--font-sans);
+    background-color: #080A0E;
+    color: #F4F6FA;
+  }
+
+  code, pre, .font-mono {
+    font-family: var(--font-mono);
+  }
+}
+
+/* Subtle custom dark scrollbar */
+::-webkit-scrollbar {
+  width: 7px;
+  height: 7px;
+}
+
+::-webkit-scrollbar-track {
+  background: #080A0E;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #1F2633;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #2E384B;
+}

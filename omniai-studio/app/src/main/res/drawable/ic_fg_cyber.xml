@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Sharp neon-cyan geometric octagonal O emblem -->
+    <path
+        android:fillColor="#1400E5FF"
+        android:strokeColor="#00E5FF"
+        android:strokeWidth="5.5"
+        android:strokeLineJoin="miter"
+        android:pathData="M42,27 L66,27 L81,42 L81,66 L66,81 L42,81 L27,66 L27,42 Z" />
+    <!-- Inner precision cutout ring -->
+    <path
+        android:fillColor="#06080D"
+        android:strokeColor="#38BDF8"
+        android:strokeWidth="2"
+        android:pathData="M46,39 L62,39 L69,46 L69,62 L62,69 L46,69 L39,62 L39,46 Z" />
+    <!-- Diagonal cyber slash accent -->
+    <path
+        android:strokeColor="#00E5FF"
+        android:strokeWidth="3"
+        android:strokeLineCap="square"
+        android:pathData="M62,46 L46,62" />
+</vector>

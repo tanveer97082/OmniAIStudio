@@ -1,0 +1,6 @@
+{
+  "name": "OmniAI-Studio Monorepo",
+  "description": "Hardened Native Android (Kotlin + Jetpack Compose + Media3) AI & Dual-GPU Kaggle Video Studio monorepo with automated GitHub Actions CI/CD.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

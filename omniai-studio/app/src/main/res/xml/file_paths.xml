@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <files-path name="rendered_videos" path="videos/" />
+    <files-path name="merged_videos" path="merged/" />
+    <files-path name="exports" path="exports/" />
+    <cache-path name="ota_apks" path="ota/" />
+    <cache-path name="temp_cache" path="tmp/" />
+    <external-files-path name="external_movies" path="Movies/" />
+</paths>

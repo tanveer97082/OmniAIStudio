@@ -1,0 +1,2832 @@
+import React, { useState } from 'react';
+import {
+  AlertTriangle,
+  ArrowDown,
+  ArrowLeft,
+  ArrowUp,
+  Bug,
+  Calculator,
+  Check,
+  ChevronDown,
+  ChevronUp,
+  Copy,
+  Download,
+  Eye,
+  EyeOff,
+  FileText,
+  Film,
+  FolderKanban,
+  Globe,
+  Home,
+  Image,
+  Languages,
+  Lock,
+  Menu,
+  MessageSquare,
+  Mic,
+  Paperclip,
+  Play,
+  Radar,
+  RefreshCw,
+  Rss,
+  ScanText,
+  Search,
+  Send,
+  Settings,
+  Share2,
+  Shield,
+  ShieldAlert,
+  Sparkles,
+  Square,
+  Terminal,
+  Trash2,
+  UploadCloud,
+  UserCheck,
+  Video,
+  Volume2,
+  X,
+  Zap,
+} from 'lucide-react';
+import {
+  BUILTIN_VIDEO_TEMPLATES,
+  deleteCustomTemplate,
+  loadStoredCustomTemplates,
+  persistCustomTemplates,
+  upsertCustomTemplate,
+  VISUAL_STYLE_OPTIONS,
+  VOICEOVER_OPTIONS,
+  type TemplateDraft,
+  type VideoTemplateRecord,
+  type VisualStyleOption,
+  type VoiceoverOption,
+} from '../utils/templateAdmin';
+import { TemplateAdminPanel } from './TemplateAdminPanel';
+
+type AndroidTab = 'home' | 'chat' | 'director' | 'projects' | 'merger' | 'gallery' | 'vault';
+
+type IconVariantId = 'DEFAULT' | 'CYBER' | 'CALCULATOR' | 'NOTES';
+type AccentId = 'CYBER_PURPLE' | 'MATRIX_GREEN' | 'ELECTRIC_CYAN' | 'CRIMSON_RED';
+
+interface IconVariantMeta {
+  id: IconVariantId;
+  title: string;
+  launcherLabel: string;
+  subtitle: string;
+  accentHex: string;
+  stealth: boolean;
+}
+
+interface AccentMeta {
+  id: AccentId;
+  label: string;
+  hex: string;
+}
+
+const APP_ICON_VARIANTS: IconVariantMeta[] = [
+  { id: 'DEFAULT', title: 'Default Core', launcherLabel: 'OmniAI Studio', subtitle: 'Neural Prism', accentHex: '#00E676', stealth: false },
+  { id: 'CYBER', title: 'Cyber Neon', launcherLabel: 'OmniAI', subtitle: 'Minimal "O"', accentHex: '#00E5FF', stealth: false },
+  { id: 'CALCULATOR', title: 'Stealth Calc', launcherLabel: 'Calculator', subtitle: 'Disguise Grid', accentHex: '#F59E0B', stealth: true },
+  { id: 'NOTES', title: 'Stealth Notes', launcherLabel: 'Quick Notes', subtitle: 'Disguise Pad', accentHex: '#FBBF24', stealth: true },
+];
+
+const THEME_ACCENTS: AccentMeta[] = [
+  { id: 'CYBER_PURPLE', label: 'Purple', hex: '#BB86FC' },
+  { id: 'MATRIX_GREEN', label: 'Matrix', hex: '#00E676' },
+  { id: 'ELECTRIC_CYAN', label: 'Cyan', hex: '#00E5FF' },
+  { id: 'CRIMSON_RED', label: 'Crimson', hex: '#FF5252' },
+];
+
+const QUICK_PROVIDER_PRESETS = [
+  { label: 'Termux/Ollama', url: 'http://127.0.0.1:8080/v1', model: 'llama3.1:8b' },
+  { label: 'Cloudflare Tunnel', url: 'https://omniai-tunnel.trycloudflare.com/v1', model: 'mistral-nemo' },
+  { label: 'HF Router', url: 'https://router.huggingface.co/v1', model: 'Qwen/Qwen2.5-72B-Instruct' },
+  { label: 'Groq', url: 'https://api.groq.com/openai/v1', model: 'llama-3.3-70b-versatile' },
+  { label: 'OpenRouter', url: 'https://openrouter.ai/api/v1', model: 'deepseek/deepseek-chat' },
+  { label: 'Gemini API', url: 'https://generativelanguage.googleapis.com/v1beta/openai', model: 'gemini-2.5-flash' },
+];
+
+const SAMPLE_CRASH_LOG = `====================================================
+Timestamp : 2026-11-21 09:41:12 UTC
+App Build : v1.0.14 (code 14)
+Device    : Pixel 8 Pro (API 34)
+Thread    : DefaultDispatcher-worker-2
+Exception : java.net.SocketTimeoutException: Tunnel timeout
+----------------------------------------------------
+at com.omniai.studio.data.remote.AiStreamingClient.streamOpenAiCompatible(AiStreamingClient.kt:129)
+at com.omniai.studio.data.remote.AiStreamingClient$streamChat$1.invokeSuspend(AiStreamingClient.kt:64)`;
+
+interface SimMessage {
+  id: number;
+  role: 'user' | 'assistant';
+  content: string;
+  provider?: string;
+}
+
+interface SimScene {
+  id: number;
+  visualPrompt: string;
+  narration: string;
+}
+
+interface SimClip {
+  id: string;
+  name: string;
+  duration: string;
+  startSec: string;
+  endSec: string;
+}
+
+interface SimDownload {
+  id: number;
+  name: string;
+  category: 'RENDER' | 'SCENE' | 'MERGED';
+  sizeMb: number;
+  status: 'COMPLETED' | 'FAILED';
+  savedToGallery: boolean;
+  thumbSaved?: boolean;
+}
+
+const INITIAL_MESSAGES: SimMessage[] = [
+  {
+    id: 1,
+    role: 'user',
+    content: 'Generate a Kotlin Media3 Transformer snippet to merge 3 MP4 clips with start/end trimming.',
+  },
+  {
+    id: 2,
+    role: 'assistant',
+    provider: 'Primary Tunnel · dolphin-mistral',
+    content:
+      'Use MediaItem.ClippingConfiguration inside EditedMediaItemSequence:\n```kotlin\nval item = MediaItem.Builder().setUri(uri)\n  .setClippingConfiguration(\n    MediaItem.ClippingConfiguration.Builder()\n      .setStartPositionMs(1000L).setEndPositionMs(5000L).build()\n  ).build()\n```',
+  },
+];
+
+const INITIAL_SCENES: SimScene[] = [
+  {
+    id: 1,
+    visualPrompt: 'Drone dolly over rain-soaked Tokyo alley at midnight, volumetric neon reflections, 35mm anamorphic',
+    narration: 'In a city that never sleeps, every frame is forged locally.',
+  },
+  {
+    id: 2,
+    visualPrompt: 'Close-up of dual GPU workstation racks humming with warm amber LED telemetry, shallow DOF',
+    narration: 'Two parallel T4 GPUs split every shot in half the render time.',
+  },
+  {
+    id: 3,
+    visualPrompt: 'Macro shot of smartphone AMOLED screen exporting final H.264 timeline into gallery',
+    narration: 'Zero cloud lock-in. Hardware encrypted from prompt to MP4.',
+  },
+];
+
+const INITIAL_CLIPS: SimClip[] = [
+  { id: 'c1', name: 'tokyo_noir_scene_1.mp4', duration: '00:05', startSec: '0.5', endSec: '4.5' },
+  { id: 'c2', name: 'tokyo_noir_scene_2.mp4', duration: '00:05', startSec: '', endSec: '' },
+  { id: 'c3', name: 'tokyo_noir_scene_3.mp4', duration: '00:05', startSec: '0.0', endSec: '4.0' },
+];
+
+const INITIAL_DOWNLOADS: SimDownload[] = [
+  { id: 1, name: 'TokyoNoir_job12_final.mp4', category: 'RENDER', sizeMb: 18.4, status: 'COMPLETED', savedToGallery: true },
+  { id: 2, name: 'TokyoNoir_job12_scene_1.mp4', category: 'SCENE', sizeMb: 6.1, status: 'COMPLETED', savedToGallery: false },
+  { id: 3, name: 'CyberBrief_job11_final.mp4', category: 'RENDER', sizeMb: 14.2, status: 'FAILED', savedToGallery: false },
+];
+
+export const AndroidSimulatorView: React.FC<{ onInspectSource: (path: string) => void }> = ({
+  onInspectSource,
+}) => {
+  const [activeTab, setActiveTab] = useState<AndroidTab>('home');
+  const [showSettingsHub, setShowSettingsHub] = useState(false);
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [activeNicheLabel, setActiveNicheLabel] = useState('🎬 3D Stories');
+  const [pendingGitChanges, setPendingGitChanges] = useState(3);
+  const [toastBanner, setToastBanner] = useState<string | null>(null);
+
+  // Upgrade 1 & 2: Global App Settings State
+  const [iconVariant, setIconVariant] = useState<IconVariantId>('DEFAULT');
+  const [pendingIconConfirm, setPendingIconConfirm] = useState<IconVariantId | null>(null);
+  const [accentId, setAccentId] = useState<AccentId>('MATRIX_GREEN');
+  const [chatFontSize, setChatFontSize] = useState<number>(13);
+  const [temperature, setTemperature] = useState<number>(0.7);
+  const [maxTokens, setMaxTokens] = useState<number>(2048);
+  const [contextWindow, setContextWindow] = useState<number>(12);
+  const [autoReadTts, setAutoReadTts] = useState<boolean>(false);
+  const [ttsSpeed, setTtsSpeed] = useState<number>(1.0);
+  const [wifiOnlyDownload, setWifiOnlyDownload] = useState<boolean>(false);
+  const [kagglePollSec, setKagglePollSec] = useState<15 | 20 | 30 | 60>(20);
+  const [autoCleanMerge, setAutoCleanMerge] = useState<boolean>(true);
+  const [crashLogText, setCrashLogText] = useState<string>(SAMPLE_CRASH_LOG);
+  const [showCrashViewer, setShowCrashViewer] = useState<boolean>(false);
+
+  // Upgrade 3: Offline TTS + Share-to-AI popup state
+  const [speakingMsgId, setSpeakingMsgId] = useState<number | null>(null);
+  const [incomingShareText, setIncomingShareText] = useState<string | null>(null);
+
+  // Upgrade 4: Character DNA, Social SEO Kit, Kaggle 30-Hr Quota & Watermark/BGM
+  const [characterProfiles] = useState([
+    {
+      id: 'arya',
+      name: 'Arya Cyber-Host',
+      appearancePrompt: '28-year-old South Asian tech narrator, emerald rim-lit glasses, matte charcoal jacket, consistent facial geometry',
+      defaultStyle: 'Cyberpunk Neon' as VisualStyleOption,
+    },
+    {
+      id: 'dev',
+      name: 'Dr. Dev Documentary',
+      appearancePrompt: '42-year-old documentary filmmaker in dark studio coat, soft tungsten key light, 35mm cinema lens',
+      defaultStyle: 'Cinematic Realism' as VisualStyleOption,
+    },
+  ]);
+  const [selectedCharacterId, setSelectedCharacterId] = useState<string>('');
+  const [weeklyGpuHours, setWeeklyGpuHours] = useState<number>(11.4);
+  const [watermarkText, setWatermarkText] = useState<string>('@OmniAIStudio');
+  const [bgmUrl, setBgmUrl] = useState<string>('https://cdn.omniai.local/lofi_ducked_bed.mp3');
+  const [expandedKitIds, setExpandedKitIds] = useState<number[]>([1]);
+
+  // Upgrade 5: Offline Doc Brain, Web URL Reader, Side-by-Side Translate, RSS News Agent & Localhost Scanner
+  const [attachedDoc, setAttachedDoc] = useState<{ name: string; pages: number; chunks: number } | null>(null);
+  const [translatedKeys, setTranslatedKeys] = useState<Record<string, { lang: string; text: string }>>({});
+  const [rssFeeds, setRssFeeds] = useState([
+    { id: 1, name: 'Hacker News AI', url: 'https://hnrss.org/newest?q=AI' },
+  ]);
+  const [newRssName, setNewRssName] = useState('');
+  const [newRssUrl, setNewRssUrl] = useState('');
+  const [newsAgentEnabled, setNewsAgentEnabled] = useState(true);
+  const [newsIntervalHours, setNewsIntervalHours] = useState<12 | 24>(24);
+  const [pendingDigest, setPendingDigest] = useState<{ title: string; topic: string; summary: string } | null>({
+    title: 'Daily AI Brief (4 headlines)',
+    topic: 'Local 1.3B Video Diffusion Breakthroughs Running on Dual T4 GPUs',
+    summary: '• Wan 2.1 bfloat16 sharding halves dual-GPU latency\n• Media3 Transformer eliminates FFmpegKit ABI crashes',
+  });
+  const [localhostScanResults, setLocalhostScanResults] = useState<
+    Array<{ port: number; url: string; hint: string; online: boolean; model: string; ms: number }>
+  >([]);
+
+  // Upgrade 6: Duress / Decoy PIN Mode
+  const [lockOverlayOpen, setLockOverlayOpen] = useState(false);
+  const [decoySandboxOpen, setDecoySandboxOpen] = useState(false);
+  const [pinEntry, setPinEntry] = useState('');
+  const [pinError, setPinError] = useState<string | null>(null);
+
+  // Tab 1 Chat State
+  const [messages, setMessages] = useState<SimMessage[]>(INITIAL_MESSAGES);
+  const [rollingSummary, setRollingSummary] = useState<string>('');
+  const [summarizedCount, setSummarizedCount] = useState<number>(0);
+  const [chatInput, setChatInput] = useState('');
+  const [simulateFailover, setSimulateFailover] = useState(false);
+  const [voiceLang, setVoiceLang] = useState<'EN' | 'HI'>('EN');
+
+  // Tab 2 Director State
+  const [topic, setTopic] = useState('Cyberpunk Noir Documentary on Edge AI');
+  const [aspectRatio, setAspectRatio] = useState<'9:16' | '16:9'>('9:16');
+  const [visualStyle, setVisualStyle] = useState<VisualStyleOption>('Cinematic Realism');
+  const [voiceover, setVoiceover] = useState<VoiceoverOption>('English Male');
+  const [burnSubtitles, setBurnSubtitles] = useState(true);
+  const [customTemplates, setCustomTemplates] = useState<VideoTemplateRecord[]>(() =>
+    loadStoredCustomTemplates()
+  );
+  const [scenes, setScenes] = useState<SimScene[]>(INITIAL_SCENES);
+  const [batchQueue, setBatchQueue] = useState<Array<{ id: number; title: string; status: string; progress: number }>>([
+    { id: 101, title: 'Tokyo Noir Short', status: 'RENDERING · T4 x2 (Poll #4)', progress: 58 },
+  ]);
+
+  // Tab 3 Media3 Merger State
+  const [clips, setClips] = useState<SimClip[]>(INITIAL_CLIPS);
+  const [muteOriginal, setMuteOriginal] = useState(false);
+  const [bgTrack, setBgTrack] = useState<string | null>('midnight_synth_loop.m4a');
+  const [mergeName, setMergeName] = useState('OmniAI_Master_Cut');
+  const [mergeProgress, setMergeProgress] = useState<number>(0);
+  const [mergeStatus, setMergeStatus] = useState<string | null>(null);
+
+  // Tab 4 Gallery State
+  const [downloads, setDownloads] = useState<SimDownload[]>(INITIAL_DOWNLOADS);
+  const [cacheMb, setCacheMb] = useState(42.8);
+  const [previewVideo, setPreviewVideo] = useState<string | null>(null);
+
+  // Tab 5 Vault & Security State
+  const [primaryUrl, setPrimaryUrl] = useState('http://127.0.0.1:8080/v1');
+  const [primaryModel, setPrimaryModel] = useState('llama3.1:8b');
+  const [flagSecure, setFlagSecure] = useState(true);
+  const [appLock, setAppLock] = useState(false);
+  const [autoLock, setAutoLock] = useState<'Immediate' | '1 Min' | '5 Min' | 'Never'>('1 Min');
+  const [keysRevealed, setKeysRevealed] = useState(false);
+  const [pingTested, setPingTested] = useState(false);
+  const [otaChecked, setOtaChecked] = useState(false);
+  const [panicStage, setPanicStage] = useState<0 | 1 | 2>(0);
+  const [wipedNotice, setWipedNotice] = useState<string | null>(null);
+
+  const activeAccent = THEME_ACCENTS.find((a) => a.id === accentId) ?? THEME_ACCENTS[1];
+  const activeIconMeta = APP_ICON_VARIANTS.find((v) => v.id === iconVariant) ?? APP_ICON_VARIANTS[0];
+  const selectedCharacter = characterProfiles.find((c) => c.id === selectedCharacterId) ?? null;
+
+  const toggleTranslateKey = (key: string, source: string) => {
+    setTranslatedKeys((prev) => {
+      if (prev[key]) {
+        const next = { ...prev };
+        delete next[key];
+        return next;
+      }
+      const isHindi = /[\u0900-\u097F]/.test(source);
+      return {
+        ...prev,
+        [key]: isHindi
+          ? { lang: 'English', text: 'Translated cleanly to English for side-by-side review.' }
+          : { lang: 'Hindi (Devanagari)', text: 'यह पाठ आपके द्विभाषी (Side-by-Side) दृश्य के लिए हिंदी में अनुवादित है।' },
+      };
+    });
+  };
+
+  const triggerToast = (msg: string) => {
+    setToastBanner(msg);
+  };
+
+  const tabSourceMap: Record<AndroidTab, string> = {
+    home: 'app/src/main/java/com/omniai/studio/ui/screens/HomeBentoScreen.kt',
+    chat: 'app/src/main/java/com/omniai/studio/ui/screens/ChatStudioScreen.kt',
+    director: 'app/src/main/java/com/omniai/studio/ui/screens/VideoDirectorScreen.kt',
+    projects: 'app/src/main/java/com/omniai/studio/ui/screens/ProjectDashboardScreen.kt',
+    merger: 'app/src/main/java/com/omniai/studio/ui/screens/VideoMergerScreen.kt',
+    gallery: 'app/src/main/java/com/omniai/studio/ui/screens/DownloadsGalleryScreen.kt',
+    vault: 'app/src/main/java/com/omniai/studio/ui/screens/VaultSettingsScreen.kt',
+  };
+
+  const estimatedTokens =
+    Math.ceil(
+      (rollingSummary.length + messages.reduce((acc, m) => acc + m.content.length, 0)) / 4
+    ) + 48;
+
+  const handleCompactMemory = () => {
+    if (messages.length < 2) return;
+    const earlier = messages.slice(0, Math.max(1, messages.length - 2));
+    const digest = earlier
+      .map((m) => `• ${m.role === 'user' ? 'User' : 'AI'}: ${m.content.replace(/\n/g, ' ').slice(0, 68)}`)
+      .join('\n');
+    setRollingSummary(digest);
+    setSummarizedCount((prev) => prev + earlier.length);
+  };
+
+  const handleSendChat = () => {
+    const text = chatInput.trim();
+    if (!text) return;
+    const provider = simulateFailover
+      ? 'Failover → Gemini 2.5 Flash (HTTP 429 bypassed)'
+      : `Primary · ${primaryModel}`;
+    const priorTopic = messages.find((m) => m.role === 'user')?.content.slice(0, 48) ?? 'this thread';
+    const newReplyId = Date.now() + 1;
+    setMessages((prev) => [
+      ...prev,
+      { id: Date.now(), role: 'user', content: text },
+      {
+        id: newReplyId,
+        role: 'assistant',
+        provider,
+        content: `Continuing from context ("${priorTopic}...") using window=${contextWindow}, temp=${temperature.toFixed(2)}, max_tokens=${maxTokens}: streamed via ${provider}.`,
+      },
+    ]);
+    if (autoReadTts) {
+      setSpeakingMsgId(newReplyId);
+      triggerToast(`Auto-Reading reply via Offline TTS (${ttsSpeed.toFixed(2)}x)`);
+    }
+    setChatInput('');
+  };
+
+  const handleApplyTemplate = (tpl: VideoTemplateRecord) => {
+    setTopic(tpl.name);
+    setAspectRatio(tpl.aspectRatio);
+    setVisualStyle(tpl.defaultVisualStyle);
+    setVoiceover(tpl.defaultVoice);
+    setBurnSubtitles(tpl.burnSubtitlesDefault);
+    setScenes(
+      tpl.scenes.map((s, i) => ({
+        id: Date.now() + i,
+        visualPrompt: s.visualDescription,
+        narration: s.narrationPlaceholder,
+      }))
+    );
+  };
+
+  const handleSaveCustomTemplate = (draft: TemplateDraft): VideoTemplateRecord => {
+    const { templates, saved } = upsertCustomTemplate(customTemplates, draft);
+    setCustomTemplates(templates);
+    persistCustomTemplates(templates);
+    return saved;
+  };
+
+  const handleDeleteCustomTemplate = (id: string) => {
+    const next = deleteCustomTemplate(customTemplates, id);
+    setCustomTemplates(next);
+    persistCustomTemplates(next);
+  };
+
+  const moveScene = (index: number, delta: number) => {
+    const target = index + delta;
+    if (target < 0 || target >= scenes.length) return;
+    const next = [...scenes];
+    const [removed] = next.splice(index, 1);
+    next.splice(target, 0, removed);
+    setScenes(next);
+  };
+
+  const enqueueBatch = () => {
+    setBatchQueue((prev) => [
+      {
+        id: Date.now(),
+        title: topic.slice(0, 32) || 'Untitled Storyboard',
+        status: `QUEUED · ${scenes.length} scenes · Poll ${kagglePollSec}s · ${wifiOnlyDownload ? 'Wi-Fi Only' : 'Any Net'}`,
+        progress: 12,
+      },
+      ...prev,
+    ]);
+  };
+
+  const moveClip = (index: number, delta: number) => {
+    const target = index + delta;
+    if (target < 0 || target >= clips.length) return;
+    const next = [...clips];
+    const [removed] = next.splice(index, 1);
+    next.splice(target, 0, removed);
+    setClips(next);
+  };
+
+  const updateClipTrim = (index: number, field: 'startSec' | 'endSec', value: string) => {
+    setClips((prev) =>
+      prev.map((c, idx) => (idx === index ? { ...c, [field]: value } : c))
+    );
+  };
+
+  const runMergePreview = () => {
+    if (clips.length < 2) return;
+    setMergeProgress(100);
+    const outFile = `${mergeName || 'OmniAI_Master_Cut'}.mp4`;
+    const trimmedCount = clips.filter((c) => c.startSec || c.endSec).length;
+    setMergeStatus(
+      `Exported to Movies/OmniAIStudio/${outFile}${trimmedCount > 0 ? ` (${trimmedCount} trimmed)` : ''}`
+    );
+    if (autoCleanMerge) setCacheMb(0);
+    setDownloads((prev) => [
+      {
+        id: Date.now(),
+        name: outFile,
+        category: 'MERGED',
+        sizeMb: Number((clips.length * 5.8).toFixed(1)),
+        status: 'COMPLETED',
+        savedToGallery: true,
+      },
+      ...prev,
+    ]);
+  };
+
+  const executePanicWipe = () => {
+    setMessages([]);
+    setScenes([]);
+    setDownloads([]);
+    setCacheMb(0);
+    setCrashLogText('');
+    setKeysRevealed(false);
+    setPanicStage(0);
+    setWipedNotice('Vault shredded, Room tables cleared, crash_log.txt & caches purged.');
+  };
+
+  const renderIconGlyph = (id: IconVariantId, color: string) => {
+    if (id === 'DEFAULT') return <Sparkles className="h-4 w-4" style={{ color }} />;
+    if (id === 'CYBER') return <Zap className="h-4 w-4" style={{ color }} />;
+    if (id === 'CALCULATOR') return <Calculator className="h-4 w-4" style={{ color }} />;
+    return <FileText className="h-4 w-4" style={{ color }} />;
+  };
+
+  return (
+    <div className="flex flex-1 min-h-0 flex-col overflow-y-auto bg-[#080A0E] p-6 lg:flex-row lg:items-start lg:justify-center lg:gap-10">
+      {/* Left Column: Android AMOLED Device Frame */}
+      <div className="relative mx-auto flex w-full max-w-[400px] shrink-0 flex-col overflow-hidden rounded-2xl border border-[#232330] bg-[#09090C]">
+        {/* Slim 56dp TopAppBar (v5.1 Hub-and-Spoke) */}
+        <div className="flex h-12 items-center justify-between border-b border-[#232330] bg-[#13131A] px-2.5 text-[11px] text-zinc-400">
+          <div className="flex items-center gap-1.5 min-w-0">
+            {showSettingsHub ? (
+              <button
+                type="button"
+                aria-label="Back from Settings Hub"
+                onClick={() => setShowSettingsHub(false)}
+                className="rounded-lg p-1.5 text-zinc-200 hover:bg-[#1B1B25]"
+              >
+                <ArrowLeft className="h-3.5 w-3.5" />
+              </button>
+            ) : (
+              <button
+                type="button"
+                aria-label="Open Navigation Drawer"
+                onClick={() => setDrawerOpen((v) => !v)}
+                className="rounded-lg p-1.5 text-zinc-200 hover:bg-[#1B1B25]"
+              >
+                <Menu className="h-4 w-4" />
+              </button>
+            )}
+            {showSettingsHub ? (
+              <span className="truncate font-semibold text-zinc-100">Settings Hub</span>
+            ) : (
+              <button
+                type="button"
+                onClick={() => {
+                  const niches = ['🎬 3D Stories', '🌌 Space Facts', '🤖 AI & Tech', '🕵️ Dark History'];
+                  const next = niches[(niches.indexOf(activeNicheLabel) + 1) % niches.length];
+                  setActiveNicheLabel(next);
+                  triggerToast(`Switched Active Niche → ${next}`);
+                }}
+                className="flex items-center gap-1 rounded-full border border-[#232330] bg-[#1B1B25] px-2.5 py-1 text-[11px] font-medium text-zinc-100 hover:border-emerald-500/40"
+              >
+                <span className="truncate">{activeNicheLabel}</span>
+                <ChevronDown className="h-3 w-3 text-zinc-400" />
+              </button>
+            )}
+          </div>
+          {!showSettingsHub && (
+            <div className="flex items-center gap-1.5 shrink-0">
+              <button
+                type="button"
+                aria-label="Open Command Palette"
+                onClick={() => triggerToast('Command Palette (Spotlight): Search settings, chats, > terminal')}
+                className="rounded-lg p-1.5 text-zinc-300 hover:bg-[#1B1B25]"
+              >
+                <Search className="h-4 w-4" />
+              </button>
+              <button
+                type="button"
+                aria-label="Live Studio Activity"
+                onClick={() => {
+                  setActiveTab('director');
+                  triggerToast('Live Activity: 1 Kaggle Dual-T4 Render Active · 11.4/30h used');
+                }}
+                className="flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[10px] font-semibold"
+                style={{
+                  borderColor: `${activeAccent.hex}55`,
+                  backgroundColor: `${activeAccent.hex}1F`,
+                  color: activeAccent.hex,
+                }}
+              >
+                <span
+                  className="h-1.5 w-1.5 rounded-full animate-pulse"
+                  style={{ backgroundColor: activeAccent.hex }}
+                />
+                <span>GPU 1</span>
+              </button>
+            </div>
+          )}
+        </div>
+
+        {/* Slide-Out ModalNavigationDrawer Overlay */}
+        {drawerOpen && !showSettingsHub && (
+          <div className="absolute inset-0 z-30 flex bg-black/70">
+            <div className="flex h-full w-64 flex-col border-r border-[#232330] bg-[#13131A] p-3 text-xs text-zinc-200 overflow-y-auto">
+              <div className="flex items-center justify-between border-b border-[#232330] pb-2.5">
+                <div>
+                  <div className="font-semibold text-zinc-100">{activeIconMeta.launcherLabel}</div>
+                  <div className="text-[10px] text-zinc-400">Hub &amp; Power Tools · v5.1</div>
+                </div>
+                <button
+                  type="button"
+                  aria-label="Close Drawer"
+                  onClick={() => setDrawerOpen(false)}
+                  className="rounded p-1 text-zinc-400 hover:bg-[#1B1B25] hover:text-zinc-100"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+              <div className="mt-3 space-y-3">
+                <div>
+                  <div className="px-2 pb-1 text-[10px] font-semibold uppercase tracking-wider text-zinc-500">
+                    Create &amp; Media
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActiveTab('merger');
+                      setDrawerOpen(false);
+                    }}
+                    className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left hover:bg-[#1B1B25]"
+                  >
+                    <Video className="h-3.5 w-3.5 text-emerald-400" />
+                    <span>Media Studio (Merge/Trim)</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActiveTab('gallery');
+                      setDrawerOpen(false);
+                    }}
+                    className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left hover:bg-[#1B1B25]"
+                  >
+                    <Download className="h-3.5 w-3.5 text-emerald-400" />
+                    <span>Offline Gallery ({downloads.length})</span>
+                  </button>
+                </div>
+                <div>
+                  <div className="px-2 pb-1 text-[10px] font-semibold uppercase tracking-wider text-zinc-500">
+                    Developer &amp; Agents
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDrawerOpen(false);
+                      triggerToast('Opened Hybrid Terminal & OmniCLI (/system/bin/sh)');
+                    }}
+                    className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left hover:bg-[#1B1B25]"
+                  >
+                    <Terminal className="h-3.5 w-3.5 text-cyan-400" />
+                    <span>Hybrid Terminal &amp; Bridge</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowSettingsHub(true);
+                      setDrawerOpen(false);
+                    }}
+                    className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left hover:bg-[#1B1B25]"
+                  >
+                    <Rss className="h-3.5 w-3.5 text-amber-400" />
+                    <span>RSS News Agent</span>
+                  </button>
+                </div>
+                <div>
+                  <div className="px-2 pb-1 text-[10px] font-semibold uppercase tracking-wider text-zinc-500">
+                    System &amp; Vault
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActiveTab('vault');
+                      setDrawerOpen(false);
+                    }}
+                    className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left hover:bg-[#1B1B25]"
+                  >
+                    <Shield className="h-3.5 w-3.5 text-emerald-400" />
+                    <span>API Vault &amp; Multi-Key Pool</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowSettingsHub(true);
+                      setDrawerOpen(false);
+                    }}
+                    className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left hover:bg-[#1B1B25]"
+                  >
+                    <Settings className="h-3.5 w-3.5 text-zinc-300" />
+                    <span>Settings &amp; Stealth Icons</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+            <div className="flex-1" onClick={() => setDrawerOpen(false)} />
+          </div>
+        )}
+
+        {/* Transient Toast Strip */}
+        {toastBanner && (
+          <div className="flex items-center justify-between border-b border-[#232330] bg-[#13131A] px-3 py-1.5 text-[11px] text-zinc-200">
+            <span className="truncate">{toastBanner}</span>
+            <button
+              type="button"
+              aria-label="Dismiss notification"
+              onClick={() => setToastBanner(null)}
+              className="ml-2 text-zinc-400 hover:text-zinc-100"
+            >
+              <X className="h-3 w-3" />
+            </button>
+          </div>
+        )}
+
+        {/* Active Screen Viewport */}
+        <div className="flex h-[580px] flex-col overflow-y-auto bg-[#09090C] p-4 text-zinc-100">
+          {showSettingsHub ? (
+            <div className="space-y-3 text-xs">
+              {/* Section 1: Appearance & App Icon */}
+              <div className="space-y-2.5 rounded-lg border border-zinc-800 bg-[#0B0E14] p-2.5">
+                <div className="font-semibold" style={{ color: activeAccent.hex }}>
+                  1. Appearance & App Icon Disguise
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  {APP_ICON_VARIANTS.map((variant) => {
+                    const selected = iconVariant === variant.id;
+                    return (
+                      <button
+                        key={variant.id}
+                        type="button"
+                        onClick={() => {
+                          if (!selected) setPendingIconConfirm(variant.id);
+                        }}
+                        className="rounded-lg border p-2 text-left transition-colors"
+                        style={{
+                          borderColor: selected ? activeAccent.hex : '#27272a',
+                          backgroundColor: selected ? '#141923' : '#000000',
+                        }}
+                      >
+                        <div className="flex items-center justify-between">
+                          <div className="flex h-7 w-7 items-center justify-center rounded-md bg-zinc-900">
+                            {renderIconGlyph(variant.id, variant.accentHex)}
+                          </div>
+                          {selected && <Check className="h-3.5 w-3.5" style={{ color: activeAccent.hex }} />}
+                        </div>
+                        <div className="mt-1.5 font-medium text-zinc-100">{variant.title}</div>
+                        <div className="text-[10px] text-zinc-400">"{variant.launcherLabel}"</div>
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {pendingIconConfirm && (
+                  <div className="rounded border border-amber-500/40 bg-amber-950/20 p-2 text-[11px]">
+                    <div className="font-medium text-amber-200">
+                      Switch launcher icon to "{APP_ICON_VARIANTS.find((v) => v.id === pendingIconConfirm)?.launcherLabel}"?
+                    </div>
+                    <div className="mt-1.5 flex gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const chosen = APP_ICON_VARIANTS.find((v) => v.id === pendingIconConfirm)!;
+                          setIconVariant(chosen.id);
+                          setPendingIconConfirm(null);
+                          triggerToast(`Activity-alias switched to "${chosen.launcherLabel}"`);
+                        }}
+                        className="flex-1 rounded py-1 font-semibold text-zinc-950"
+                        style={{ backgroundColor: activeAccent.hex }}
+                      >
+                        Apply Icon
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setPendingIconConfirm(null)}
+                        className="rounded border border-zinc-700 px-2.5 py-1 text-zinc-300"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                <div className="space-y-1 pt-1">
+                  <div className="text-[10px] text-zinc-400">Theme Accent Color</div>
+                  <div className="grid grid-cols-4 gap-1.5">
+                    {THEME_ACCENTS.map((acc) => (
+                      <button
+                        key={acc.id}
+                        type="button"
+                        onClick={() => setAccentId(acc.id)}
+                        className="flex flex-col items-center gap-1 rounded border py-1.5 text-[10px]"
+                        style={{
+                          borderColor: accentId === acc.id ? acc.hex : '#27272a',
+                          backgroundColor: accentId === acc.id ? '#141923' : '#000000',
+                        }}
+                      >
+                        <span className="h-3.5 w-3.5 rounded-full" style={{ backgroundColor: acc.hex }} />
+                        <span>{acc.label}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div>
+                  <div className="flex justify-between text-[11px]">
+                    <span className="text-zinc-300">Chat Font Size</span>
+                    <span className="font-mono" style={{ color: activeAccent.hex }}>
+                      {chatFontSize}sp
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    min={12}
+                    max={20}
+                    value={chatFontSize}
+                    onChange={(e) => setChatFontSize(Number(e.target.value))}
+                    aria-label="Chat font size"
+                    className="w-full"
+                    style={{ accentColor: activeAccent.hex }}
+                  />
+                </div>
+              </div>
+
+              {/* Section 2: AI Engine & Generation Controls */}
+              <div className="space-y-2 rounded-lg border border-zinc-800 bg-[#0B0E14] p-2.5">
+                <div className="font-semibold" style={{ color: activeAccent.hex }}>
+                  2. AI Engine & Offline TTS
+                </div>
+                <div>
+                  <div className="flex justify-between text-[11px]">
+                    <span>Temperature</span>
+                    <span className="font-mono">{temperature.toFixed(2)}</span>
+                  </div>
+                  <input
+                    type="range"
+                    min={0}
+                    max={1.5}
+                    step={0.05}
+                    value={temperature}
+                    onChange={(e) => setTemperature(Number(e.target.value))}
+                    aria-label="Temperature"
+                    className="w-full"
+                    style={{ accentColor: activeAccent.hex }}
+                  />
+                </div>
+                <div>
+                  <div className="flex justify-between text-[11px]">
+                    <span>Max Output Tokens</span>
+                    <span className="font-mono">{maxTokens}</span>
+                  </div>
+                  <input
+                    type="range"
+                    min={256}
+                    max={8192}
+                    step={256}
+                    value={maxTokens}
+                    onChange={(e) => setMaxTokens(Number(e.target.value))}
+                    aria-label="Max output tokens"
+                    className="w-full"
+                    style={{ accentColor: activeAccent.hex }}
+                  />
+                </div>
+                <div>
+                  <div className="flex justify-between text-[11px]">
+                    <span>Chat Context Window</span>
+                    <span className="font-mono">{contextWindow} msgs</span>
+                  </div>
+                  <input
+                    type="range"
+                    min={4}
+                    max={30}
+                    value={contextWindow}
+                    onChange={(e) => setContextWindow(Number(e.target.value))}
+                    aria-label="Chat context window"
+                    className="w-full"
+                    style={{ accentColor: activeAccent.hex }}
+                  />
+                </div>
+                <label className="flex items-center justify-between pt-1">
+                  <span>Auto-Read AI Replies (Offline TTS)</span>
+                  <input
+                    type="checkbox"
+                    checked={autoReadTts}
+                    onChange={(e) => setAutoReadTts(e.target.checked)}
+                    style={{ accentColor: activeAccent.hex }}
+                  />
+                </label>
+                <div>
+                  <div className="flex justify-between text-[11px]">
+                    <span>Hindi/English TTS Speed</span>
+                    <span className="font-mono">{ttsSpeed.toFixed(2)}x</span>
+                  </div>
+                  <input
+                    type="range"
+                    min={0.75}
+                    max={1.5}
+                    step={0.05}
+                    value={ttsSpeed}
+                    onChange={(e) => setTtsSpeed(Number(e.target.value))}
+                    aria-label="TTS speed"
+                    className="w-full"
+                    style={{ accentColor: activeAccent.hex }}
+                  />
+                </div>
+              </div>
+
+              {/* Section 3: Automation & Download Rules */}
+              <div className="space-y-2 rounded-lg border border-zinc-800 bg-[#0B0E14] p-2.5">
+                <div className="font-semibold" style={{ color: activeAccent.hex }}>
+                  3. Automation & Download Rules
+                </div>
+                <label className="flex items-center justify-between">
+                  <span>Wi-Fi Only Auto-Download</span>
+                  <input
+                    type="checkbox"
+                    checked={wifiOnlyDownload}
+                    onChange={(e) => setWifiOnlyDownload(e.target.checked)}
+                    style={{ accentColor: activeAccent.hex }}
+                  />
+                </label>
+                <div className="flex items-center justify-between">
+                  <span className="text-zinc-400">Kaggle Poll Interval</span>
+                  <div className="flex gap-1">
+                    {([15, 20, 30, 60] as const).map((sec) => (
+                      <button
+                        key={sec}
+                        type="button"
+                        onClick={() => setKagglePollSec(sec)}
+                        className="rounded px-2 py-0.5 font-mono text-[10px]"
+                        style={{
+                          backgroundColor: kagglePollSec === sec ? `${activeAccent.hex}30` : '#18181b',
+                          color: kagglePollSec === sec ? activeAccent.hex : '#a1a1aa',
+                        }}
+                      >
+                        {sec}s
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <label className="flex items-center justify-between">
+                  <span>Auto-Clean Temp After Merge</span>
+                  <input
+                    type="checkbox"
+                    checked={autoCleanMerge}
+                    onChange={(e) => setAutoCleanMerge(e.target.checked)}
+                    style={{ accentColor: activeAccent.hex }}
+                  />
+                </label>
+
+                {/* Kaggle 30-Hr Weekly GPU Quota Meter */}
+                <div className="space-y-1 border-t border-zinc-800 pt-2">
+                  <div className="flex items-center justify-between text-[11px]">
+                    <span className="font-medium text-zinc-200">Kaggle Weekly GPU Quota</span>
+                    <span
+                      className="font-mono text-[10px]"
+                      style={{ color: 30 - weeklyGpuHours < 2 ? '#FF5252' : activeAccent.hex }}
+                    >
+                      Used: {weeklyGpuHours.toFixed(1)} / 30.0 hrs
+                    </span>
+                  </div>
+                  <div className="h-1.5 w-full overflow-hidden rounded bg-zinc-900">
+                    <div
+                      className="h-full"
+                      style={{
+                        width: `${Math.min(100, (weeklyGpuHours / 30) * 100)}%`,
+                        backgroundColor: 30 - weeklyGpuHours < 2 ? '#FF5252' : activeAccent.hex,
+                      }}
+                    />
+                  </div>
+                  {30 - weeklyGpuHours < 2 && (
+                    <div className="flex items-center gap-1 text-[10px] text-red-400">
+                      <AlertTriangle className="h-3 w-3 shrink-0" />
+                      <span>Warning: Less than 2.0 hrs remaining this week!</span>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Section 3B: News Tracker (Scheduled RSS WorkManager Agent) */}
+              <div className="space-y-2 rounded-lg border border-zinc-800 bg-[#0B0E14] p-2.5">
+                <div className="flex items-center justify-between">
+                  <span className="inline-flex items-center gap-1 font-semibold" style={{ color: activeAccent.hex }}>
+                    <Rss className="h-3.5 w-3.5" />
+                    <span>News Tracker (RSS Agent)</span>
+                  </span>
+                  <div className="flex gap-1">
+                    {([12, 24] as const).map((h) => (
+                      <button
+                        key={h}
+                        type="button"
+                        onClick={() => setNewsIntervalHours(h)}
+                        className="rounded px-1.5 py-0.5 font-mono text-[10px]"
+                        style={{
+                          backgroundColor: newsIntervalHours === h ? `${activeAccent.hex}30` : '#18181b',
+                          color: newsIntervalHours === h ? activeAccent.hex : '#a1a1aa',
+                        }}
+                      >
+                        {h}h
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <label className="flex items-center justify-between">
+                  <span>WorkManager RSS Poll (Human-in-the-Loop)</span>
+                  <input
+                    type="checkbox"
+                    checked={newsAgentEnabled}
+                    onChange={(e) => setNewsAgentEnabled(e.target.checked)}
+                    style={{ accentColor: activeAccent.hex }}
+                  />
+                </label>
+                <div className="flex gap-1">
+                  <input
+                    type="text"
+                    value={newRssName}
+                    onChange={(e) => setNewRssName(e.target.value)}
+                    placeholder="Feed name"
+                    className="w-24 rounded border border-zinc-800 bg-black px-1.5 py-1 text-[10px] text-zinc-100"
+                  />
+                  <input
+                    type="text"
+                    value={newRssUrl}
+                    onChange={(e) => setNewRssUrl(e.target.value)}
+                    placeholder="https://site/rss.xml"
+                    className="flex-1 rounded border border-zinc-800 bg-black px-1.5 py-1 text-[10px] text-zinc-100"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!newRssUrl.trim()) return;
+                      setRssFeeds((prev) => [
+                        ...prev,
+                        { id: Date.now(), name: newRssName.trim() || 'Custom RSS', url: newRssUrl.trim() },
+                      ]);
+                      setNewRssName('');
+                      setNewRssUrl('');
+                      triggerToast('Saved RSS feed to Room News Tracker.');
+                    }}
+                    className="rounded px-2 py-1 text-[10px] font-semibold text-zinc-950"
+                    style={{ backgroundColor: activeAccent.hex }}
+                  >
+                    Add
+                  </button>
+                </div>
+                <div className="text-[10px] text-zinc-400">
+                  Feeds ({rssFeeds.length}): {rssFeeds.map((f) => f.name).join(', ')}
+                </div>
+                {pendingDigest && (
+                  <div className="space-y-1 rounded border border-emerald-500/30 bg-emerald-950/20 p-2">
+                    <div className="font-semibold text-emerald-300">
+                      Daily AI Brief Ready for Approval
+                    </div>
+                    <p className="whitespace-pre-line text-[10px] text-zinc-300">{pendingDigest.summary}</p>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setTopic(pendingDigest.topic);
+                        setShowSettingsHub(false);
+                        setActiveTab('director');
+                        triggerToast('Approved RSS Brief -> loaded into Video Director.');
+                      }}
+                      className="w-full rounded py-1 text-[10px] font-semibold text-zinc-950"
+                      style={{ backgroundColor: activeAccent.hex }}
+                    >
+                      Approve &amp; Open in Director
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              {/* Section 4: Duress / Decoy PIN Security */}
+              <div className="space-y-2 rounded-lg border border-zinc-800 bg-[#0B0E14] p-2.5">
+                <div className="font-semibold" style={{ color: activeAccent.hex }}>
+                  4. Duress / Decoy PIN Security
+                </div>
+                <p className="text-[10px] text-zinc-400">
+                  Master PIN (<span className="font-mono text-zinc-200">1234</span>) unlocks Studio · Decoy PIN (
+                  <span className="font-mono text-amber-300">0000</span>) opens harmless Quick Notes sandbox without wiping real data.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setLockOverlayOpen(true);
+                    setPinEntry('');
+                    setPinError(null);
+                  }}
+                  className="w-full rounded border border-zinc-700 bg-zinc-900 py-1.5 text-[11px] font-medium text-zinc-200 hover:bg-zinc-800"
+                >
+                  Lock &amp; Test Master / Decoy PIN
+                </button>
+              </div>
+
+              {/* Section 4 & 5: Storage, OTA & Crash Diagnostics */}
+              <div className="space-y-2 rounded-lg border border-zinc-800 bg-[#0B0E14] p-2.5">
+                <div className="font-semibold" style={{ color: activeAccent.hex }}>
+                  5. Storage, OTA & Crash Diagnostics
+                </div>
+                <div className="font-mono text-[10px] text-zinc-400 tabular-nums">
+                  Videos: 38.7 MB · Cache: {cacheMb.toFixed(1)} MB · Room DB: 1.4 MB
+                </div>
+                <div className="grid grid-cols-2 gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setCacheMb(0);
+                      triggerToast('Cleared temporary Media3 & OTA cache.');
+                    }}
+                    className="rounded border border-zinc-700 bg-zinc-900 py-1.5 text-[11px] font-medium text-zinc-200 hover:bg-zinc-800"
+                  >
+                    1-Tap Clear Cache
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowCrashViewer((v) => !v)}
+                    className="inline-flex items-center justify-center gap-1 rounded border border-zinc-700 bg-zinc-900 py-1.5 text-[11px] font-medium text-zinc-200 hover:bg-zinc-800"
+                  >
+                    <Bug className="h-3 w-3" />
+                    <span>{showCrashViewer ? 'Hide Log' : 'Crash Log'}</span>
+                  </button>
+                </div>
+                {showCrashViewer && (
+                  <div className="space-y-1.5 rounded border border-zinc-800 bg-black p-2">
+                    <pre className="max-h-28 overflow-auto font-mono text-[10px] leading-4 text-zinc-300">
+                      {crashLogText || 'No crashes recorded in filesDir/crash_log.txt.'}
+                    </pre>
+                    <div className="flex gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          navigator.clipboard?.writeText(crashLogText).catch(() => {});
+                          triggerToast('Crash log copied to clipboard.');
+                        }}
+                        disabled={!crashLogText}
+                        className="flex-1 rounded border border-zinc-700 py-1 text-[10px] text-zinc-200 disabled:opacity-40"
+                      >
+                        Copy Log
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setCrashLogText('');
+                          triggerToast('Cleared crash_log.txt.');
+                        }}
+                        disabled={!crashLogText}
+                        className="rounded border border-red-500/40 px-2.5 py-1 text-[10px] text-red-300 disabled:opacity-40"
+                      >
+                        Clear
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          ) : (
+            <>
+              {activeTab === 'home' && (
+                <div className="flex flex-1 flex-col gap-4">
+                  {/* Hero Card: Active Niche + Next Suggested Episode */}
+                  <div className="rounded-2xl border border-[#232330] bg-[#13131A] p-4 space-y-2.5">
+                    <div className="flex items-center justify-between">
+                      <span
+                        className="rounded-full border px-2 py-0.5 text-[10px] font-semibold"
+                        style={{
+                          borderColor: `${activeAccent.hex}55`,
+                          backgroundColor: `${activeAccent.hex}1F`,
+                          color: activeAccent.hex,
+                        }}
+                      >
+                        {activeNicheLabel}
+                      </span>
+                      <span className="text-[10px] font-mono text-zinc-400">Next Ep #05</span>
+                    </div>
+                    <div>
+                      <div className="text-sm font-semibold text-zinc-100">
+                        Why Dual T4 Sharding Cuts Wan 2.1 Render Time in Half
+                      </div>
+                      <p className="mt-0.5 text-[11px] text-zinc-400">
+                        9:16 · Cinematic Realism · Auto-continuity ready
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setTopic('Why Dual T4 Sharding Cuts Wan 2.1 Render Time in Half');
+                        setActiveTab('director');
+                        triggerToast('Auto-typed Next Episode into Video Studio Step 1');
+                      }}
+                      className="flex w-full items-center justify-center gap-1.5 rounded-xl py-2.5 text-xs font-semibold text-black transition-opacity hover:opacity-90"
+                      style={{ backgroundColor: activeAccent.hex }}
+                    >
+                      <Sparkles className="h-3.5 w-3.5" />
+                      <span>Auto-Type &amp; Create</span>
+                    </button>
+                  </div>
+
+                  {/* 2-Column Bento Row 1: GPU Quota Ring + Active Project Push */}
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="rounded-2xl border border-[#232330] bg-[#13131A] p-3.5 flex flex-col justify-between gap-2">
+                      <div className="text-[11px] font-semibold text-zinc-200">Kaggle GPU</div>
+                      <div className="flex items-center gap-2.5">
+                        <svg viewBox="0 0 36 36" className="h-11 w-11 shrink-0 -rotate-90">
+                          <circle cx="18" cy="18" r="15" fill="none" stroke="#232330" strokeWidth="3.5" />
+                          <circle
+                            cx="18"
+                            cy="18"
+                            r="15"
+                            fill="none"
+                            stroke={activeAccent.hex}
+                            strokeWidth="3.5"
+                            strokeDasharray={`${Math.min(100, (weeklyGpuHours / 30) * 94.2)} 94.2`}
+                            strokeLinecap="round"
+                          />
+                        </svg>
+                        <div>
+                          <div className="font-mono text-xs font-bold text-zinc-100">
+                            {weeklyGpuHours.toFixed(1)}/30h
+                          </div>
+                          <div className="text-[10px] text-zinc-400">Weekly T4</div>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="rounded-2xl border border-[#232330] bg-[#13131A] p-3.5 flex flex-col justify-between gap-2">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[11px] font-semibold text-zinc-200">Project</span>
+                        <span className="font-mono text-[10px] text-amber-400">
+                          {pendingGitChanges > 0 ? `${pendingGitChanges} diff` : 'Synced'}
+                        </span>
+                      </div>
+                      <div className="truncate text-xs font-medium text-zinc-100">OmniAI-Studio</div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setPendingGitChanges(0);
+                          triggerToast('Atomic 6-step Git Auto-Push completed → main');
+                        }}
+                        className="flex items-center justify-center gap-1 rounded-lg border border-emerald-500/40 bg-emerald-500/10 py-1.5 text-[10px] font-semibold text-emerald-300 hover:bg-emerald-500/20"
+                      >
+                        <UploadCloud className="h-3 w-3" />
+                        <span>1-Tap Push</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* 2-Column Bento Row 2: Quick AI Voice + Open Terminal */}
+                  <div className="grid grid-cols-2 gap-3">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setActiveTab('chat');
+                        triggerToast('Quick AI Voice listening (EN / HI)...');
+                      }}
+                      className="flex items-center gap-2.5 rounded-2xl border border-[#232330] bg-[#13131A] p-3.5 text-left hover:border-emerald-500/40"
+                    >
+                      <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-emerald-500/15 text-emerald-400">
+                        <Mic className="h-4 w-4" />
+                      </div>
+                      <div>
+                        <div className="text-xs font-semibold text-zinc-100">Quick Voice</div>
+                        <div className="text-[10px] text-zinc-400">EN / HI Live</div>
+                      </div>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => triggerToast('Hybrid Terminal ready · /system/bin/sh + OmniCLI')}
+                      className="flex items-center gap-2.5 rounded-2xl border border-[#232330] bg-[#13131A] p-3.5 text-left hover:border-cyan-500/40"
+                    >
+                      <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-cyan-500/15 text-cyan-400">
+                        <Terminal className="h-4 w-4" />
+                      </div>
+                      <div>
+                        <div className="text-xs font-semibold text-zinc-100">Terminal</div>
+                        <div className="text-[10px] text-zinc-400">OmniCLI</div>
+                      </div>
+                    </button>
+                  </div>
+
+                  {/* Recent Activity Strip */}
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[11px] font-semibold text-zinc-300">Recent Activity</span>
+                      <button
+                        type="button"
+                        onClick={() => setActiveTab('gallery')}
+                        className="text-[10px] font-medium"
+                        style={{ color: activeAccent.hex }}
+                      >
+                        Gallery
+                      </button>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setActiveTab('chat')}
+                      className="flex w-full items-center justify-between rounded-xl border border-[#232330] bg-[#13131A] px-3 py-2.5 text-left hover:border-zinc-700"
+                    >
+                      <div className="min-w-0">
+                        <div className="truncate text-xs font-medium text-zinc-100">Media3 Transformer Clip Merge</div>
+                        <div className="text-[10px] text-zinc-400">Chat · Primary Tunnel</div>
+                      </div>
+                      <MessageSquare className="h-3.5 w-3.5 shrink-0 text-zinc-400" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setActiveTab('gallery')}
+                      className="flex w-full items-center justify-between rounded-xl border border-[#232330] bg-[#13131A] px-3 py-2.5 text-left hover:border-zinc-700"
+                    >
+                      <div className="min-w-0">
+                        <div className="truncate text-xs font-medium text-zinc-100">TokyoNoir_job12_final.mp4</div>
+                        <div className="text-[10px] text-zinc-400">Rendered · 18.4 MB</div>
+                      </div>
+                      <Film className="h-3.5 w-3.5 shrink-0 text-emerald-400" />
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {activeTab === 'projects' && (
+                <div className="relative flex min-h-full flex-1 flex-col gap-3 pb-1">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h2 className="text-sm font-semibold text-zinc-100">Projects &amp; Git Hub</h2>
+                      <p className="text-[10px] text-zinc-400">Kanban · Fullscreen Code Editor · Atomic Push</p>
+                    </div>
+                    <span className="rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 font-mono text-[10px] text-amber-300">
+                      {pendingGitChanges > 0 ? `+2 ~${Math.max(0, pendingGitChanges - 2)} -0` : 'Synced'}
+                    </span>
+                  </div>
+                  <div className="rounded-2xl border border-[#232330] bg-[#13131A] p-3.5 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-semibold text-zinc-100">OmniAI-Studio</span>
+                      <span className="text-[10px] font-mono text-emerald-400">main · v5.1</span>
+                    </div>
+                    <p className="text-[11px] text-zinc-400">
+                      Jetpack Compose AMOLED Suite + Zero-Dependency GitHub Git Data API Engine.
+                    </p>
+                    <div className="space-y-1">
+                      <div className="flex justify-between text-[10px] text-zinc-400">
+                        <span>Kanban Progress</span>
+                        <span className="text-emerald-400">8 / 10 done</span>
+                      </div>
+                      <div className="h-1.5 w-full overflow-hidden rounded bg-[#1B1B25]">
+                        <div className="h-full w-4/5 bg-emerald-400" />
+                      </div>
+                    </div>
+                  </div>
+                  <div className="rounded-2xl border border-[#232330] bg-[#13131A] p-3.5 space-y-1.5">
+                    <div className="text-xs font-semibold text-zinc-200">Changed Files Ready for Atomic Push</div>
+                    <div className="font-mono text-[10px] text-emerald-400">+ ui/theme/DesignTokens.kt</div>
+                    <div className="font-mono text-[10px] text-emerald-400">+ ui/components/AppNavigationShell.kt</div>
+                    <div className="font-mono text-[10px] text-amber-300">~ ui/screens/HomeBentoScreen.kt</div>
+                  </div>
+                  {pendingGitChanges > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setPendingGitChanges(0);
+                        triggerToast('Sticky Git Auto-Push: Committed 3 files atomically to GitHub!');
+                      }}
+                      className="sticky bottom-1 mt-auto ml-auto inline-flex items-center gap-1.5 rounded-full bg-emerald-400 px-3.5 py-2 text-xs font-semibold text-black shadow-lg hover:bg-emerald-300"
+                    >
+                      <UploadCloud className="h-3.5 w-3.5" />
+                      <span>Git Auto-Push ({pendingGitChanges} changes)</span>
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {activeTab === 'chat' && (
+                <div className="flex flex-1 flex-col gap-3">
+                  <div className="flex items-center justify-between">
+                    <h2 className="text-sm font-semibold">AI Chat Studio</h2>
+                    <button
+                      type="button"
+                      onClick={() => setSimulateFailover((v) => !v)}
+                      className={`rounded px-2 py-1 text-[11px] font-medium transition-colors ${
+                        simulateFailover
+                          ? 'bg-amber-500/20 text-amber-300'
+                          : 'bg-zinc-900 text-zinc-400 hover:text-zinc-200'
+                      }`}
+                    >
+                      {simulateFailover ? 'Failover: Gemini 2.5' : 'Primary Tunnel'}
+                    </button>
+                  </div>
+
+                  {/* Room Conversation Memory Strip */}
+                  <div className="flex items-center justify-between rounded border border-zinc-800/90 bg-[#0B0E14] px-2.5 py-1.5 text-[10px]">
+                    <span className="font-mono text-zinc-400 tabular-nums">
+                      Memory: {messages.length}/{contextWindow} win · {summarizedCount} sum · ~{estimatedTokens} tok
+                    </span>
+                    <button
+                      type="button"
+                      onClick={handleCompactMemory}
+                      className="font-medium whitespace-nowrap shrink-0"
+                      style={{ color: activeAccent.hex }}
+                    >
+                      Compact
+                    </button>
+                  </div>
+
+                  {rollingSummary && (
+                    <div className="rounded border border-emerald-500/30 bg-emerald-950/20 px-2.5 py-1.5 text-[10px] text-emerald-200">
+                      <div className="font-semibold text-emerald-300">Rolling Summary (Persisted in Room)</div>
+                      <p className="mt-0.5 whitespace-pre-line text-zinc-300">{rollingSummary}</p>
+                    </div>
+                  )}
+
+                  <div className="flex-1 space-y-2.5 overflow-y-auto pr-1">
+                    {messages.length === 0 ? (
+                      <p className="py-12 text-center text-xs text-zinc-500">
+                        Chat history cleared. Start a new SSE session.
+                      </p>
+                    ) : (
+                      messages.map((m) => {
+                        const codeMatch = m.content.match(/```(\w*)\n([\s\S]*?)```/);
+                        const leadText = codeMatch
+                          ? m.content.slice(0, codeMatch.index).trim()
+                          : m.content;
+                        const codeLang = codeMatch?.[1] || 'code';
+                        const codeBody = codeMatch?.[2]?.trimEnd() || '';
+                        const isSpeaking = speakingMsgId === m.id;
+                        return (
+                          <div
+                            key={m.id}
+                            className={`rounded-lg border p-2.5 ${
+                              m.role === 'user' ? 'bg-zinc-900/90 text-zinc-100' : 'border-zinc-800 bg-[#0B0E14] text-zinc-200'
+                            }`}
+                            style={{
+                              borderColor: m.role === 'user' ? `${activeAccent.hex}66` : undefined,
+                              fontSize: `${chatFontSize}px`,
+                            }}
+                          >
+                            <div className="mb-1 flex items-center justify-between gap-2 text-[10px] text-zinc-400">
+                              <span style={m.role === 'user' ? { color: activeAccent.hex } : undefined}>
+                                {m.role === 'user' ? 'You' : 'OmniAI'}
+                              </span>
+                              <div className="flex items-center gap-1.5 min-w-0">
+                                {m.provider && <span className="truncate font-mono">{m.provider}</span>}
+                                {m.role === 'assistant' && (
+                                  <>
+                                    <button
+                                      type="button"
+                                      aria-label={`Translate message ${m.id} side-by-side`}
+                                      onClick={() => toggleTranslateKey(`msg_${m.id}`, m.content)}
+                                      className="rounded p-0.5 hover:bg-zinc-800"
+                                      style={{ color: translatedKeys[`msg_${m.id}`] ? '#00E676' : activeAccent.hex }}
+                                    >
+                                      <Languages className="h-3.5 w-3.5" />
+                                    </button>
+                                    <button
+                                      type="button"
+                                      aria-label={isSpeaking ? 'Stop TTS read aloud' : 'Read message aloud via offline TTS'}
+                                      onClick={() => {
+                                        if (isSpeaking) {
+                                          setSpeakingMsgId(null);
+                                        } else {
+                                          setSpeakingMsgId(m.id);
+                                          triggerToast(`Offline TTS speaking (${ttsSpeed.toFixed(2)}x EN/HI auto-detect)`);
+                                        }
+                                      }}
+                                      className="rounded p-0.5 hover:bg-zinc-800"
+                                      style={{ color: isSpeaking ? '#F59E0B' : activeAccent.hex }}
+                                    >
+                                      {isSpeaking ? <Square className="h-3 w-3" /> : <Volume2 className="h-3.5 w-3.5" />}
+                                    </button>
+                                  </>
+                                )}
+                              </div>
+                            </div>
+                            {translatedKeys[`msg_${m.id}`] ? (
+                              <div className="grid grid-cols-2 gap-1.5 text-[11px]">
+                                <div className="rounded border border-zinc-800 bg-black p-1.5">
+                                  <div className="mb-0.5 text-[9px] text-zinc-400">Original</div>
+                                  <p className="whitespace-pre-wrap leading-4">{leadText}</p>
+                                </div>
+                                <div className="rounded border border-emerald-500/40 bg-emerald-950/20 p-1.5">
+                                  <div className="mb-0.5 text-[9px] text-emerald-300">
+                                    {translatedKeys[`msg_${m.id}`].lang}
+                                  </div>
+                                  <p className="whitespace-pre-wrap leading-4 text-zinc-100">
+                                    {translatedKeys[`msg_${m.id}`].text}
+                                  </p>
+                                </div>
+                              </div>
+                            ) : (
+                              <>
+                                {leadText && (
+                                  <p className="whitespace-pre-wrap leading-5">{leadText}</p>
+                                )}
+                                {codeBody && (
+                                  <div className="mt-2 overflow-hidden rounded border border-zinc-800 bg-black">
+                                    <div className="flex items-center justify-between border-b border-zinc-900 px-2.5 py-1 text-[10px]">
+                                      <span className="font-mono" style={{ color: activeAccent.hex }}>
+                                        {codeLang}
+                                      </span>
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          navigator.clipboard?.writeText(codeBody).catch(() => {});
+                                        }}
+                                        className="font-medium text-zinc-400 hover:text-zinc-100"
+                                      >
+                                        Copy
+                                      </button>
+                                    </div>
+                                    <pre className="overflow-x-auto p-2.5 font-mono text-[11px] leading-5 text-zinc-200">
+                                      {codeBody}
+                                    </pre>
+                                  </div>
+                                )}
+                              </>
+                            )}
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
+
+                  <div className="space-y-2 border-t border-zinc-900 pt-2">
+                    {attachedDoc && (
+                      <div className="flex items-center justify-between rounded border border-emerald-500/40 bg-emerald-950/20 px-2 py-1 text-[10px] text-emerald-300">
+                        <span className="truncate">
+                          Attached: {attachedDoc.name} ({attachedDoc.pages}p · {attachedDoc.chunks} chunks via PdfRenderer + ML Kit)
+                        </span>
+                        <button
+                          type="button"
+                          aria-label="Remove attached document"
+                          onClick={() => setAttachedDoc(null)}
+                          className="ml-2 text-zinc-400 hover:text-white"
+                        >
+                          <X className="h-3 w-3" />
+                        </button>
+                      </div>
+                    )}
+                    <div className="flex items-center justify-between gap-1 text-[10px] text-zinc-400">
+                      <div className="flex gap-1">
+                        {(['EN', 'HI'] as const).map((lang) => (
+                          <button
+                            key={lang}
+                            type="button"
+                            onClick={() => setVoiceLang(lang)}
+                            className="rounded px-1.5 py-0.5 font-medium"
+                            style={{
+                              backgroundColor: voiceLang === lang ? `${activeAccent.hex}30` : '#18181b',
+                              color: voiceLang === lang ? activeAccent.hex : '#a1a1aa',
+                            }}
+                          >
+                            {lang}
+                          </button>
+                        ))}
+                      </div>
+                      <div className="flex gap-1">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setAttachedDoc({ name: 'Architecture_Spec.pdf', pages: 4, chunks: 2 });
+                            triggerToast('Offline PdfRenderer + ML Kit OCR extracted 4 PDF pages.');
+                          }}
+                          className="inline-flex items-center gap-1 rounded border border-zinc-800 bg-zinc-950 px-2 py-0.5 text-zinc-200 hover:bg-zinc-900"
+                        >
+                          <Paperclip className="h-3 w-3" style={{ color: activeAccent.hex }} />
+                          <span>Attach File</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setChatInput('Read & summarize https://blog.omniai.dev/wan21-dual-gpu (Jsoup clean article extracted)');
+                            triggerToast('Jsoup Web Reader stripped HTML boilerplate cleanly.');
+                          }}
+                          className="inline-flex items-center gap-1 rounded border border-zinc-800 bg-zinc-950 px-2 py-0.5 text-zinc-200 hover:bg-zinc-900"
+                        >
+                          <Globe className="h-3 w-3" style={{ color: activeAccent.hex }} />
+                          <span>Read URL</span>
+                        </button>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        aria-label="Scan image with offline OCR"
+                        onClick={() => {
+                          setChatInput(
+                            voiceLang === 'HI'
+                              ? 'OCR स्कैन: भारत में AI और क्वांटम कंप्यूटिंग का भविष्य'
+                              : 'OCR Scan: Explain AndroidX Media3 ClippingConfiguration pipeline'
+                          );
+                          triggerToast('ML Kit Offline OCR extracted text (Hindi + English).');
+                        }}
+                        className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-zinc-800 bg-zinc-950 hover:bg-zinc-900"
+                        style={{ color: activeAccent.hex }}
+                      >
+                        <ScanText className="h-4 w-4" />
+                      </button>
+                      <button
+                        type="button"
+                        aria-label="Voice input dictation"
+                        onClick={() =>
+                          setChatInput(
+                            voiceLang === 'HI'
+                              ? 'Dual GPU Kaggle worker ka architecture samjhao'
+                              : 'Explain PBKDF2 + AES-256-GCM .omniai backup format'
+                          )
+                        }
+                        className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-zinc-800 bg-zinc-950 hover:bg-zinc-900"
+                        style={{ color: activeAccent.hex }}
+                      >
+                        <Mic className="h-4 w-4" />
+                      </button>
+                      <input
+                        type="text"
+                        value={chatInput}
+                        onChange={(e) => setChatInput(e.target.value)}
+                        onKeyDown={(e) => e.key === 'Enter' && handleSendChat()}
+                        placeholder="Message OmniAI..."
+                        aria-label="Chat prompt input"
+                        className="h-9 flex-1 rounded-md border border-zinc-800 bg-[#0B0E14] px-2.5 text-xs text-zinc-100 placeholder:text-zinc-500 focus:outline-none"
+                      />
+                      <button
+                        type="button"
+                        aria-label="Send chat message"
+                        onClick={handleSendChat}
+                        className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-zinc-950"
+                        style={{ backgroundColor: activeAccent.hex }}
+                      >
+                        <Send className="h-4 w-4" />
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {activeTab === 'director' && (
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <h2 className="text-sm font-semibold">Automated Video Director</h2>
+                    <button
+                      type="button"
+                      onClick={() => setWeeklyGpuHours((h) => (h < 28 ? 28.6 : 11.4))}
+                      className="rounded border border-zinc-800 bg-zinc-950 px-2 py-0.5 font-mono text-[10px] text-zinc-300"
+                    >
+                      {weeklyGpuHours < 28 ? 'Sim Low Quota' : 'Reset Quota'}
+                    </button>
+                  </div>
+
+                  {/* Kaggle 30-Hr Weekly GPU Quota Meter */}
+                  <div
+                    className="space-y-1 rounded-lg border bg-[#0B0E14] p-2 text-[11px]"
+                    style={{ borderColor: 30 - weeklyGpuHours < 2 ? '#FF5252' : '#27272a' }}
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="font-medium text-zinc-200">Kaggle Weekly GPU Quota</span>
+                      <span
+                        className="font-mono text-[10px]"
+                        style={{ color: 30 - weeklyGpuHours < 2 ? '#FF5252' : activeAccent.hex }}
+                      >
+                        Used: {weeklyGpuHours.toFixed(1)} hrs / 30.0 hrs — Resets weekly
+                      </span>
+                    </div>
+                    <div className="h-1.5 w-full overflow-hidden rounded bg-zinc-900">
+                      <div
+                        className="h-full"
+                        style={{
+                          width: `${Math.min(100, (weeklyGpuHours / 30) * 100)}%`,
+                          backgroundColor: 30 - weeklyGpuHours < 2 ? '#FF5252' : activeAccent.hex,
+                        }}
+                      />
+                    </div>
+                    {30 - weeklyGpuHours < 2 && (
+                      <div className="flex items-center gap-1 text-[10px] text-red-400">
+                        <AlertTriangle className="h-3 w-3 shrink-0" />
+                        <span>Low quota warning: {(30 - weeklyGpuHours).toFixed(1)} hrs left!</span>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="space-y-2 rounded-lg border border-zinc-800 bg-[#0B0E14] p-2.5">
+                    {/* Lock Character DNA Dropdown */}
+                    <div className="flex items-center gap-1.5 text-[11px]">
+                      <UserCheck className="h-3.5 w-3.5 shrink-0" style={{ color: activeAccent.hex }} />
+                      <select
+                        aria-label="Lock Character DNA"
+                        value={selectedCharacterId}
+                        onChange={(e) => {
+                          const id = e.target.value;
+                          setSelectedCharacterId(id);
+                          const found = characterProfiles.find((c) => c.id === id);
+                          if (found) {
+                            setVisualStyle(found.defaultStyle);
+                            setScenes((prev) =>
+                              prev.map((s) =>
+                                s.visualPrompt.includes('[Character DNA:')
+                                  ? s
+                                  : { ...s, visualPrompt: `[Character DNA: ${found.appearancePrompt}] ${s.visualPrompt}` }
+                              )
+                            );
+                            triggerToast(`Locked Character DNA '${found.name}' across all scenes.`);
+                          }
+                        }}
+                        className="flex-1 rounded border border-zinc-800 bg-black px-2 py-1 text-[11px] text-zinc-100 focus:outline-none"
+                      >
+                        <option value="">Lock Character DNA (None)</option>
+                        {characterProfiles.map((c) => (
+                          <option key={c.id} value={c.id}>
+                            DNA: {c.name} ({c.defaultStyle})
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    {selectedCharacter && (
+                      <div className="rounded border border-emerald-500/30 bg-emerald-950/20 px-2 py-1 text-[10px] text-emerald-300">
+                        Injected into every scene: {selectedCharacter.appearancePrompt}
+                      </div>
+                    )}
+
+                    <div className="flex items-center gap-1.5">
+                      <input
+                        type="text"
+                        value={topic}
+                        onChange={(e) => setTopic(e.target.value)}
+                        aria-label="Video topic"
+                        className="flex-1 rounded border border-zinc-800 bg-black px-2.5 py-1.5 text-xs text-zinc-100 focus:outline-none"
+                      />
+                      <button
+                        type="button"
+                        aria-label="Read Web URL into video topic"
+                        onClick={() => {
+                          setTopic('Jsoup Article: Dual T4 GPU Sharding for 1.3B Video Models');
+                          triggerToast('Jsoup Web Reader loaded clean article into Topic.');
+                        }}
+                        className="flex h-8 w-8 shrink-0 items-center justify-center rounded border border-zinc-800 bg-black hover:bg-zinc-900"
+                        style={{ color: activeAccent.hex }}
+                      >
+                        <Globe className="h-3.5 w-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        aria-label="Scan image OCR into video topic"
+                        onClick={() => {
+                          setTopic('Scanned Notes: 5 Breakthroughs in Local Edge AI');
+                          triggerToast('Offline OCR populated Video Topic.');
+                        }}
+                        className="flex h-8 w-8 shrink-0 items-center justify-center rounded border border-zinc-800 bg-black hover:bg-zinc-900"
+                        style={{ color: activeAccent.hex }}
+                      >
+                        <ScanText className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                    <div className="flex items-center justify-between gap-2 text-[11px]">
+                      <div className="flex gap-1">
+                        {(['9:16', '16:9'] as const).map((r) => (
+                          <button
+                            key={r}
+                            type="button"
+                            onClick={() => setAspectRatio(r)}
+                            className="rounded px-2 py-1 font-mono"
+                            style={{
+                              backgroundColor: aspectRatio === r ? `${activeAccent.hex}30` : '#18181b',
+                              color: aspectRatio === r ? activeAccent.hex : '#a1a1aa',
+                            }}
+                          >
+                            {r}
+                          </button>
+                        ))}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setBurnSubtitles((v) => !v)}
+                        className="rounded px-2 py-1"
+                        style={{
+                          backgroundColor: burnSubtitles ? `${activeAccent.hex}30` : '#18181b',
+                          color: burnSubtitles ? activeAccent.hex : '#a1a1aa',
+                        }}
+                      >
+                        Subtitles: {burnSubtitles ? 'ON' : 'OFF'}
+                      </button>
+                    </div>
+                    <div className="grid grid-cols-2 gap-1.5 text-[10px]">
+                      <div>
+                        <label htmlFor="director-style" className="mb-0.5 block text-zinc-400">
+                          Visual Style
+                        </label>
+                        <select
+                          id="director-style"
+                          value={visualStyle}
+                          onChange={(e) => setVisualStyle(e.target.value as VisualStyleOption)}
+                          className="w-full rounded border border-zinc-800 bg-black px-2 py-1 text-[11px] text-zinc-200 focus:outline-none"
+                        >
+                          {VISUAL_STYLE_OPTIONS.map((style) => (
+                            <option key={style} value={style}>
+                              {style}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <div>
+                        <label htmlFor="director-voice" className="mb-0.5 block text-zinc-400">
+                          Voiceover
+                        </label>
+                        <select
+                          id="director-voice"
+                          value={voiceover}
+                          onChange={(e) => setVoiceover(e.target.value as VoiceoverOption)}
+                          className="w-full rounded border border-zinc-800 bg-black px-2 py-1 text-[11px] text-zinc-200 focus:outline-none"
+                        >
+                          {VOICEOVER_OPTIONS.map((v) => (
+                            <option key={v} value={v}>
+                              {v}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-1.5 text-[10px]">
+                      <input
+                        type="text"
+                        value={watermarkText}
+                        onChange={(e) => setWatermarkText(e.target.value)}
+                        placeholder="Watermark text"
+                        aria-label="Watermark text"
+                        className="rounded border border-zinc-800 bg-black px-2 py-1 text-zinc-200 focus:outline-none"
+                      />
+                      <input
+                        type="text"
+                        value={bgmUrl}
+                        onChange={(e) => setBgmUrl(e.target.value)}
+                        placeholder="BGM URL (15% ducked)"
+                        aria-label="Background music URL"
+                        className="rounded border border-zinc-800 bg-black px-2 py-1 text-zinc-200 focus:outline-none"
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setTopic((t) => `${t} — ${visualStyle}, 24fps Wan 2.1 motion`)}
+                      className="flex w-full items-center justify-center gap-1.5 rounded border border-zinc-700 bg-zinc-900 py-1.5 text-xs font-medium text-zinc-200 hover:bg-zinc-800"
+                    >
+                      <Sparkles className="h-3.5 w-3.5" style={{ color: activeAccent.hex }} />
+                      <span>Enhance Prompt</span>
+                    </button>
+                  </div>
+
+                  {/* Templates Library + Admin Studio Section */}
+                  <TemplateAdminPanel
+                    builtinTemplates={BUILTIN_VIDEO_TEMPLATES}
+                    customTemplates={customTemplates}
+                    onApplyTemplate={handleApplyTemplate}
+                    onSaveCustomTemplate={handleSaveCustomTemplate}
+                    onDeleteCustomTemplate={handleDeleteCustomTemplate}
+                  />
+
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="font-medium text-zinc-300">Scene Editor ({scenes.length})</span>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setScenes((prev) => [
+                            ...prev,
+                            {
+                              id: Date.now(),
+                              visualPrompt: 'Wide tracking shot across obsidian glass lab',
+                              narration: `Scene ${prev.length + 1} voiceover script.`,
+                            },
+                          ])
+                        }
+                        style={{ color: activeAccent.hex }}
+                      >
+                        + Add Scene
+                      </button>
+                    </div>
+                    {scenes.map((sc, idx) => (
+                      <div key={sc.id} className="rounded-lg border border-zinc-800 bg-[#0B0E14] p-2.5 text-xs">
+                        <div className="mb-1 flex items-center justify-between">
+                          <span className="font-mono text-[11px]" style={{ color: activeAccent.hex }}>
+                            Scene {idx + 1}
+                          </span>
+                          <div className="flex items-center gap-1">
+                            <button
+                              type="button"
+                              aria-label={`Translate scene ${idx + 1} narration`}
+                              onClick={() => toggleTranslateKey(`scene_${sc.id}`, sc.narration)}
+                              className="p-1 hover:text-zinc-100"
+                              style={{ color: translatedKeys[`scene_${sc.id}`] ? '#00E676' : activeAccent.hex }}
+                            >
+                              <Languages className="h-3.5 w-3.5" />
+                            </button>
+                            <button
+                              type="button"
+                              aria-label={`Move scene ${idx + 1} up`}
+                              disabled={idx === 0}
+                              onClick={() => moveScene(idx, -1)}
+                              className="p-1 text-zinc-400 hover:text-zinc-100 disabled:opacity-30"
+                            >
+                              <ArrowUp className="h-3.5 w-3.5" />
+                            </button>
+                            <button
+                              type="button"
+                              aria-label={`Move scene ${idx + 1} down`}
+                              disabled={idx === scenes.length - 1}
+                              onClick={() => moveScene(idx, 1)}
+                              className="p-1 text-zinc-400 hover:text-zinc-100 disabled:opacity-30"
+                            >
+                              <ArrowDown className="h-3.5 w-3.5" />
+                            </button>
+                            <button
+                              type="button"
+                              aria-label={`Delete scene ${idx + 1}`}
+                              onClick={() => setScenes((prev) => prev.filter((_, i) => i !== idx))}
+                              className="p-1 text-red-400 hover:text-red-300"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </button>
+                          </div>
+                        </div>
+                        <p className="text-zinc-200">{sc.visualPrompt}</p>
+                        <p className="mt-1 text-[11px] text-zinc-400">VO: {sc.narration}</p>
+                        {translatedKeys[`scene_${sc.id}`] && (
+                          <div className="mt-1.5 grid grid-cols-2 gap-1.5 rounded border border-emerald-500/30 bg-black p-1.5 text-[10px]">
+                            <div>
+                              <span className="text-zinc-500">Original: </span>
+                              <span className="text-zinc-300">{sc.narration}</span>
+                            </div>
+                            <div>
+                              <span className="text-emerald-400">{translatedKeys[`scene_${sc.id}`].lang}: </span>
+                              <span className="text-zinc-100">{translatedKeys[`scene_${sc.id}`].text}</span>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={enqueueBatch}
+                    disabled={scenes.length === 0}
+                    className="w-full rounded-md py-2 text-xs font-semibold text-zinc-950 disabled:opacity-40"
+                    style={{ backgroundColor: activeAccent.hex }}
+                  >
+                    Queue Background Render (Kaggle T4 x2)
+                  </button>
+
+                  <div className="space-y-1.5 border-t border-zinc-900 pt-2">
+                    <div className="text-[11px] font-medium text-zinc-400">
+                      ForegroundService Batch Queue ({batchQueue.length})
+                    </div>
+                    {batchQueue.map((job) => (
+                      <div key={job.id} className="rounded border border-zinc-800 bg-[#0B0E14] p-2 text-xs">
+                        <div className="flex justify-between">
+                          <span className="font-medium text-zinc-200">{job.title}</span>
+                          <span className="font-mono tabular-nums" style={{ color: activeAccent.hex }}>
+                            {job.progress}%
+                          </span>
+                        </div>
+                        <div className="mt-0.5 text-[11px] text-zinc-400">{job.status}</div>
+                        <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded bg-zinc-900">
+                          <div className="h-full" style={{ width: `${job.progress}%`, backgroundColor: activeAccent.hex }} />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {activeTab === 'merger' && (
+                <div className="space-y-3">
+                  <div>
+                    <h2 className="text-sm font-semibold">Media3 On-Device Merger & Trimmer</h2>
+                    <p className="text-[11px] text-zinc-400">
+                      Media3 Transformer · ClippingConfiguration Start/End (sec)
+                    </p>
+                  </div>
+
+                  <div className="space-y-2">
+                    {clips.map((clip, idx) => (
+                      <div
+                        key={clip.id}
+                        className="space-y-2 rounded-lg border border-zinc-800 bg-[#0B0E14] px-2.5 py-2 text-xs"
+                      >
+                        <div className="flex items-center justify-between">
+                          <div className="min-w-0">
+                            <div className="truncate font-mono text-zinc-200">
+                              #{idx + 1} {clip.name}
+                            </div>
+                            <div className="text-[10px] text-zinc-500 tabular-nums">{clip.duration}</div>
+                          </div>
+                          <div className="flex items-center gap-1 shrink-0">
+                            <button
+                              type="button"
+                              aria-label={`Move clip ${idx + 1} up`}
+                              disabled={idx === 0}
+                              onClick={() => moveClip(idx, -1)}
+                              className="p-1 text-zinc-400 hover:text-zinc-100 disabled:opacity-30"
+                            >
+                              <ArrowUp className="h-3.5 w-3.5" />
+                            </button>
+                            <button
+                              type="button"
+                              aria-label={`Move clip ${idx + 1} down`}
+                              disabled={idx === clips.length - 1}
+                              onClick={() => moveClip(idx, 1)}
+                              className="p-1 text-zinc-400 hover:text-zinc-100 disabled:opacity-30"
+                            >
+                              <ArrowDown className="h-3.5 w-3.5" />
+                            </button>
+                            <button
+                              type="button"
+                              aria-label={`Remove clip ${clip.name}`}
+                              onClick={() => setClips((prev) => prev.filter((_, i) => i !== idx))}
+                              className="p-1 text-red-400 hover:text-red-300"
+                            >
+                              <X className="h-3.5 w-3.5" />
+                            </button>
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-2 text-[10px]">
+                          <label className="flex items-center gap-1.5 rounded border border-zinc-800 bg-black px-2 py-1">
+                            <span className="text-zinc-500">Start(s)</span>
+                            <input
+                              type="text"
+                              value={clip.startSec}
+                              onChange={(e) => updateClipTrim(idx, 'startSec', e.target.value)}
+                              placeholder="0.0"
+                              aria-label={`Clip ${idx + 1} start seconds`}
+                              className="w-full bg-transparent font-mono text-zinc-100 focus:outline-none"
+                            />
+                          </label>
+                          <label className="flex items-center gap-1.5 rounded border border-zinc-800 bg-black px-2 py-1">
+                            <span className="text-zinc-500">End(s)</span>
+                            <input
+                              type="text"
+                              value={clip.endSec}
+                              onChange={(e) => updateClipTrim(idx, 'endSec', e.target.value)}
+                              placeholder="Full"
+                              aria-label={`Clip ${idx + 1} end seconds`}
+                              className="w-full bg-transparent font-mono text-zinc-100 focus:outline-none"
+                            />
+                          </label>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="space-y-2 rounded-lg border border-zinc-800 bg-[#0B0E14] p-2.5 text-xs">
+                    <label className="flex items-center justify-between">
+                      <span>Mute Original Clip Audio</span>
+                      <input
+                        type="checkbox"
+                        checked={muteOriginal}
+                        onChange={(e) => setMuteOriginal(e.target.checked)}
+                        style={{ accentColor: activeAccent.hex }}
+                      />
+                    </label>
+                    <div className="flex items-center justify-between">
+                      <span className="text-zinc-400">BG Track</span>
+                      <button
+                        type="button"
+                        onClick={() => setBgTrack((t) => (t ? null : 'midnight_synth_loop.m4a'))}
+                        className="font-mono text-[11px]"
+                        style={{ color: activeAccent.hex }}
+                      >
+                        {bgTrack ?? '+ Attach .m4a'}
+                      </button>
+                    </div>
+                    <input
+                      type="text"
+                      value={mergeName}
+                      onChange={(e) => setMergeName(e.target.value)}
+                      aria-label="Merged output filename"
+                      className="w-full rounded border border-zinc-800 bg-black px-2.5 py-1.5 font-mono text-xs text-zinc-100 focus:outline-none"
+                    />
+                    {mergeProgress > 0 && (
+                      <div className="space-y-1">
+                        <div className="h-1.5 w-full overflow-hidden rounded bg-zinc-900">
+                          <div className="h-full" style={{ width: `${mergeProgress}%`, backgroundColor: activeAccent.hex }} />
+                        </div>
+                        <div className="font-mono text-[11px]" style={{ color: activeAccent.hex }}>
+                          {mergeStatus}
+                        </div>
+                      </div>
+                    )}
+                    <button
+                      type="button"
+                      onClick={runMergePreview}
+                      disabled={clips.length < 2}
+                      className="w-full rounded-md py-2 font-semibold text-zinc-950 disabled:opacity-40"
+                      style={{ backgroundColor: activeAccent.hex }}
+                    >
+                      Merge {clips.length} Clips On-Device
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {activeTab === 'gallery' && (
+                <div className="space-y-3">
+                  <h2 className="text-sm font-semibold">Downloads & Offline Gallery</h2>
+
+                  <div className="rounded-lg border border-zinc-800 bg-[#0B0E14] p-2.5 text-xs">
+                    <div className="flex items-center justify-between">
+                      <span className="text-zinc-400">Temp & OTA Cache · DB 1.4 MB</span>
+                      <span className="font-mono text-zinc-200 tabular-nums">{cacheMb.toFixed(1)} MB</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setCacheMb(0)}
+                      className="mt-2 w-full rounded border border-zinc-700 bg-zinc-900 py-1.5 text-xs font-medium text-zinc-200 hover:bg-zinc-800"
+                    >
+                      1-Tap Clean Temp Cache
+                    </button>
+                  </div>
+
+                  {previewVideo && (
+                    <div className="rounded-lg border border-emerald-500/40 bg-[#0B0E14] p-3 text-xs">
+                      <div className="flex items-center justify-between">
+                        <span className="font-mono text-emerald-300">ExoPlayer · {previewVideo}</span>
+                        <button
+                          type="button"
+                          aria-label="Close ExoPlayer preview"
+                          onClick={() => setPreviewVideo(null)}
+                          className="text-zinc-400 hover:text-zinc-100"
+                        >
+                          <X className="h-4 w-4" />
+                        </button>
+                      </div>
+                      <div className="mt-2 flex h-28 items-center justify-center rounded bg-black font-mono text-[11px] text-zinc-400">
+                        Playing local H.264/AAC MP4 offline (Media3 ExoPlayer 1.2.1)
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="space-y-2">
+                    {downloads.map((d) => (
+                      <div key={d.id} className="rounded-lg border border-zinc-800 bg-[#0B0E14] p-2.5 text-xs">
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="min-w-0">
+                            <div className="truncate font-medium text-zinc-100">{d.name}</div>
+                            <div className="mt-0.5 font-mono text-[11px] text-zinc-400 tabular-nums">
+                              {d.category} · {d.status} · {d.sizeMb} MB
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            aria-label={`Delete ${d.name}`}
+                            onClick={() => setDownloads((prev) => prev.filter((item) => item.id !== d.id))}
+                            className="text-red-400 hover:text-red-300"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
+                        <div className="mt-2 flex gap-1.5">
+                          {d.status === 'COMPLETED' ? (
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => setPreviewVideo(d.name)}
+                                className="flex flex-1 items-center justify-center gap-1 rounded py-1 font-medium text-zinc-950"
+                                style={{ backgroundColor: activeAccent.hex }}
+                              >
+                                <Play className="h-3 w-3" />
+                                <span>ExoPlayer</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setDownloads((prev) =>
+                                    prev.map((item) =>
+                                      item.id === d.id ? { ...item, thumbSaved: true } : item
+                                    )
+                                  );
+                                  triggerToast(`Saved HD Thumbnail to Pictures/OmniAIStudio/`);
+                                }}
+                                className="inline-flex items-center gap-1 rounded border border-zinc-700 px-2 py-1 text-zinc-200 hover:bg-zinc-800"
+                              >
+                                <Image className="h-3 w-3" />
+                                <span>{d.thumbSaved ? 'Saved' : 'HD Thumb'}</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setDownloads((prev) =>
+                                    prev.map((item) =>
+                                      item.id === d.id ? { ...item, savedToGallery: true } : item
+                                    )
+                                  )
+                                }
+                                className="rounded border border-zinc-700 px-2 py-1 text-zinc-200 hover:bg-zinc-800"
+                              >
+                                {d.savedToGallery ? 'Saved' : 'Gallery'}
+                              </button>
+                            </>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setDownloads((prev) =>
+                                  prev.map((item) =>
+                                    item.id === d.id ? { ...item, status: 'COMPLETED' } : item
+                                  )
+                                )
+                              }
+                              className="flex w-full items-center justify-center gap-1 rounded border border-amber-500/40 bg-amber-500/10 py-1 text-amber-300"
+                            >
+                              <RefreshCw className="h-3 w-3" />
+                              <span>Retry Download</span>
+                            </button>
+                          )}
+                        </div>
+                        {d.status === 'COMPLETED' && (
+                          <div className="mt-2 border-t border-zinc-800/80 pt-1.5">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setExpandedKitIds((prev) =>
+                                  prev.includes(d.id) ? prev.filter((id) => id !== d.id) : [...prev, d.id]
+                                )
+                              }
+                              className="flex w-full items-center justify-between text-[10px] font-medium"
+                              style={{ color: activeAccent.hex }}
+                            >
+                              <span>Publishing Kit (Social Media SEO)</span>
+                              {expandedKitIds.includes(d.id) ? (
+                                <ChevronUp className="h-3.5 w-3.5" />
+                              ) : (
+                                <ChevronDown className="h-3.5 w-3.5" />
+                              )}
+                            </button>
+                            {expandedKitIds.includes(d.id) && (
+                              <div className="mt-1.5 space-y-1.5 rounded border border-zinc-800 bg-black p-2 text-[10px]">
+                                <div className="font-medium text-zinc-100">
+                                  Title: {d.name.replace(/_/g, ' ').replace('.mp4', '')} — Edge AI Breakdown
+                                </div>
+                                <div className="text-zinc-400">
+                                  Rendered locally with Dual-GPU Wan 2.1 + Edge-TTS. #OmniAI #AIVideo #Shorts #Wan21
+                                </div>
+                                <div className="grid grid-cols-3 gap-1">
+                                  <button
+                                    type="button"
+                                    onClick={() => triggerToast('Copied Viral Title to clipboard.')}
+                                    className="inline-flex items-center justify-center gap-1 rounded border border-zinc-700 py-1 text-zinc-200 hover:bg-zinc-900"
+                                  >
+                                    <Copy className="h-2.5 w-2.5" />
+                                    <span>Title</span>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => triggerToast('Copied Description + Hashtags.')}
+                                    className="inline-flex items-center justify-center gap-1 rounded border border-zinc-700 py-1 text-zinc-200 hover:bg-zinc-900"
+                                  >
+                                    <Copy className="h-2.5 w-2.5" />
+                                    <span>Desc+Tags</span>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => triggerToast('Opened Android Share Sheet via FileProvider.')}
+                                    className="inline-flex items-center justify-center gap-1 rounded py-1 font-semibold text-zinc-950"
+                                    style={{ backgroundColor: activeAccent.hex }}
+                                  >
+                                    <Share2 className="h-2.5 w-2.5" />
+                                    <span>Share</span>
+                                  </button>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {activeTab === 'vault' && (
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <h2 className="text-sm font-semibold">Vault & Security</h2>
+                    <button
+                      type="button"
+                      onClick={() => setKeysRevealed((v) => !v)}
+                      className="inline-flex items-center gap-1 rounded border border-zinc-700 bg-zinc-900 px-2 py-1 text-[11px] text-zinc-200"
+                    >
+                      {keysRevealed ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
+                      <span>{keysRevealed ? 'Mask Keys' : 'Biometric Reveal'}</span>
+                    </button>
+                  </div>
+
+                  {wipedNotice && (
+                    <div className="rounded border border-red-500/40 bg-red-950/30 p-2 text-[11px] text-red-200">
+                      {wipedNotice}
+                    </div>
+                  )}
+
+                  {/* Quick Provider Preset Chips & Localhost Auto-Scanner */}
+                  <div className="space-y-1.5 rounded-lg border border-zinc-800 bg-[#0B0E14] p-2.5">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] font-medium text-zinc-400">Quick Provider Presets</span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setLocalhostScanResults([
+                            { port: 8080, url: 'http://127.0.0.1:8080', hint: 'llama.cpp / Termux', online: true, model: 'dolphin-mistral-7b.gguf', ms: 14 },
+                            { port: 11434, url: 'http://127.0.0.1:11434', hint: 'Ollama OpenAI API', online: true, model: 'qwen2.5:14b', ms: 22 },
+                            { port: 8001, url: 'http://127.0.0.1:8001', hint: 'vLLM / FastChat', online: false, model: '', ms: 1000 },
+                            { port: 5000, url: 'http://127.0.0.1:5000', hint: 'KoboldCpp', online: false, model: '', ms: 1000 },
+                          ]);
+                          triggerToast('Scanned 127.0.0.1 ports 8080, 11434, 8001, 5000 (1s timeout).');
+                        }}
+                        className="inline-flex items-center gap-1 rounded border border-zinc-700 bg-zinc-900 px-2 py-0.5 text-[10px] font-medium text-zinc-200 hover:bg-zinc-800"
+                      >
+                        <Radar className="h-3 w-3" style={{ color: activeAccent.hex }} />
+                        <span>Scan Localhost</span>
+                      </button>
+                    </div>
+                    {localhostScanResults.length > 0 && (
+                      <div className="space-y-1 rounded border border-zinc-800 bg-black p-1.5 text-[10px]">
+                        {localhostScanResults.map((cand) => (
+                          <div key={cand.port} className="flex items-center justify-between gap-1">
+                            <span className="truncate font-mono text-zinc-300">
+                              :{cand.port} {cand.online ? `ONLINE (${cand.ms}ms · ${cand.model})` : 'OFFLINE'}
+                            </span>
+                            {cand.online && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setPrimaryUrl(cand.url);
+                                  setPrimaryModel(cand.model);
+                                  triggerToast(`Auto-filled local server ${cand.url}`);
+                                }}
+                                className="rounded px-1.5 py-0.5 font-semibold text-zinc-950"
+                                style={{ backgroundColor: activeAccent.hex }}
+                              >
+                                Use
+                              </button>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    <div className="flex flex-wrap gap-1">
+                      {QUICK_PROVIDER_PRESETS.map((preset) => {
+                        const active = primaryUrl === preset.url;
+                        return (
+                          <button
+                            key={preset.label}
+                            type="button"
+                            onClick={() => {
+                              setPrimaryUrl(preset.url);
+                              setPrimaryModel(preset.model);
+                              triggerToast(`Preset applied: ${preset.label}`);
+                            }}
+                            className="rounded px-2 py-1 text-[10px] font-medium transition-colors"
+                            style={{
+                              backgroundColor: active ? `${activeAccent.hex}30` : '#18181b',
+                              color: active ? activeAccent.hex : '#a1a1aa',
+                            }}
+                          >
+                            {preset.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <div className="truncate font-mono text-[10px] text-zinc-300">
+                      {primaryUrl} · {primaryModel}
+                    </div>
+                  </div>
+
+                  <div className="space-y-1.5 rounded-lg border border-zinc-800 bg-[#0B0E14] p-2.5 font-mono text-[11px]">
+                    <div className="flex justify-between">
+                      <span className="text-zinc-400">Primary Key</span>
+                      <span className="text-zinc-100">{keysRevealed ? 'sk-tunnel-live-9f82' : '••••9f82'}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-zinc-400">HF Token</span>
+                      <span className="text-zinc-100">{keysRevealed ? 'hf_OmNiAi_7741' : '••••7741'}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-zinc-400">Gemini Key</span>
+                      <span className="text-zinc-100">{keysRevealed ? 'AIzaSyD-omni-4410' : '••••4410'}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-zinc-400">Kaggle Key</span>
+                      <span className="text-zinc-100">{keysRevealed ? 'kg_dual_t4_2819' : '••••2819'}</span>
+                    </div>
+                  </div>
+
+                  <div className="space-y-2 rounded-lg border border-zinc-800 bg-[#0B0E14] p-2.5 text-xs">
+                    <label className="flex items-center justify-between">
+                      <span>Privacy Shield (FLAG_SECURE)</span>
+                      <input
+                        type="checkbox"
+                        checked={flagSecure}
+                        onChange={(e) => setFlagSecure(e.target.checked)}
+                        style={{ accentColor: activeAccent.hex }}
+                      />
+                    </label>
+                    <label className="flex items-center justify-between">
+                      <span>Biometric / Device PIN Lock</span>
+                      <input
+                        type="checkbox"
+                        checked={appLock}
+                        onChange={(e) => setAppLock(e.target.checked)}
+                        style={{ accentColor: activeAccent.hex }}
+                      />
+                    </label>
+                    <div className="flex items-center justify-between pt-1">
+                      <span className="text-zinc-400">Auto-Lock</span>
+                      <div className="flex gap-1">
+                        {(['Immediate', '1 Min', '5 Min', 'Never'] as const).map((t) => (
+                          <button
+                            key={t}
+                            type="button"
+                            onClick={() => setAutoLock(t)}
+                            className="rounded px-1.5 py-0.5 text-[10px]"
+                            style={{
+                              backgroundColor: autoLock === t ? `${activeAccent.hex}30` : '#18181b',
+                              color: autoLock === t ? activeAccent.hex : '#a1a1aa',
+                            }}
+                          >
+                            {t}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2 text-xs">
+                    <button
+                      type="button"
+                      onClick={() => setPingTested(true)}
+                      className="rounded border border-zinc-700 bg-zinc-900 py-1.5 font-medium text-zinc-200 hover:bg-zinc-800"
+                    >
+                      Test Endpoints
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setOtaChecked(true)}
+                      className="rounded border border-zinc-700 bg-zinc-900 py-1.5 font-medium text-zinc-200 hover:bg-zinc-800"
+                    >
+                      Check GitHub OTA
+                    </button>
+                  </div>
+
+                  {pingTested && (
+                    <div className="rounded border border-zinc-800 bg-[#0B0E14] p-2 font-mono text-[11px] space-y-1 tabular-nums">
+                      <div className="flex justify-between">
+                        <span>Primary Endpoint</span>
+                        <span style={{ color: activeAccent.hex }}>200 OK · 84 ms</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span>Gemini 2.5 Flash</span>
+                        <span style={{ color: activeAccent.hex }}>200 OK · 142 ms</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span>Kaggle T4 API</span>
+                        <span style={{ color: activeAccent.hex }}>200 OK · 196 ms</span>
+                      </div>
+                    </div>
+                  )}
+
+                  {otaChecked && (
+                    <div className="rounded border border-emerald-500/30 bg-emerald-950/20 p-2 text-[11px] text-emerald-200">
+                      GitHub Release v1.0.14 ready · Signed APK via FileProvider installer
+                    </div>
+                  )}
+
+                  {panicStage === 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setPanicStage(1)}
+                      className="flex w-full items-center justify-center gap-1.5 rounded-md bg-red-600 py-2 text-xs font-semibold text-white hover:bg-red-500"
+                    >
+                      <ShieldAlert className="h-3.5 w-3.5" />
+                      <span>Panic Wipe Vault & Room DB</span>
+                    </button>
+                  )}
+                  {panicStage === 1 && (
+                    <div className="space-y-1.5 rounded border border-red-500/50 bg-red-950/30 p-2 text-xs">
+                      <p className="text-red-200">Step 1/2: Shred EncryptedSharedPreferences and Room DB?</p>
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setPanicStage(2)}
+                          className="flex-1 rounded bg-red-600 py-1 font-medium text-white"
+                        >
+                          Confirm Step 1
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setPanicStage(0)}
+                          className="rounded border border-zinc-700 px-3 py-1 text-zinc-300"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                  {panicStage === 2 && (
+                    <div className="space-y-1.5 rounded border border-red-500 bg-red-950/50 p-2 text-xs">
+                      <p className="font-medium text-red-100">Final Warning (2/2): Shred all keys now?</p>
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          onClick={executePanicWipe}
+                          className="flex-1 rounded bg-red-600 py-1 font-semibold text-white"
+                        >
+                          SHRED NOW
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setPanicStage(0)}
+                          className="rounded border border-zinc-700 px-3 py-1 text-zinc-300"
+                        >
+                          Abort
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </>
+          )}
+        </div>
+
+        {/* Upgrade 6: Duress / Decoy PIN Lock Overlay */}
+        {lockOverlayOpen && (
+          <div className="absolute inset-0 z-30 flex flex-col items-center justify-center bg-black p-6 text-center">
+            <Lock className="h-10 w-10" style={{ color: activeAccent.hex }} />
+            <h3 className="mt-3 text-base font-semibold text-zinc-100">OmniAI-Studio Locked</h3>
+            <p className="mt-1 text-[11px] text-zinc-400">
+              Enter Master PIN (<span className="font-mono text-zinc-200">1234</span>) or Decoy PIN (
+              <span className="font-mono text-amber-300">0000</span>)
+            </p>
+            <input
+              type="password"
+              value={pinEntry}
+              onChange={(e) => {
+                setPinEntry(e.target.value.replace(/\D/g, '').slice(0, 6));
+                setPinError(null);
+              }}
+              aria-label="Duress or Master PIN input"
+              placeholder="Enter 4-digit PIN"
+              className="mt-4 w-full rounded border border-zinc-700 bg-[#0B0E14] px-3 py-2 text-center font-mono text-sm tracking-widest text-zinc-100"
+            />
+            {pinError && <p className="mt-1.5 text-[11px] text-red-400">{pinError}</p>}
+            <div className="mt-3 flex w-full gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  if (pinEntry === '1234') {
+                    setLockOverlayOpen(false);
+                    setDecoySandboxOpen(false);
+                    triggerToast('Master PIN verified (Salted SHA-256).');
+                  } else if (pinEntry === '0000') {
+                    setLockOverlayOpen(false);
+                    setDecoySandboxOpen(true);
+                  } else {
+                    setPinError('Incorrect PIN. Use 1234 (Master) or 0000 (Decoy).');
+                  }
+                }}
+                className="flex-1 rounded py-1.5 text-xs font-semibold text-zinc-950"
+                style={{ backgroundColor: activeAccent.hex }}
+              >
+                Unlock PIN
+              </button>
+              <button
+                type="button"
+                onClick={() => setLockOverlayOpen(false)}
+                className="rounded border border-zinc-700 px-3 py-1.5 text-xs text-zinc-300"
+              >
+                Biometric
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Upgrade 6: Harmless Isolated Quick Notes Decoy Sandbox */}
+        {decoySandboxOpen && (
+          <div className="absolute inset-0 z-30 flex flex-col bg-[#0A0A0F] text-zinc-100">
+            <div className="flex items-center justify-between border-b border-zinc-800 bg-[#11131A] px-3.5 py-2.5">
+              <span className="inline-flex items-center gap-1.5 text-sm font-semibold text-amber-400">
+                <FileText className="h-4 w-4" />
+                <span>Quick Notes</span>
+              </span>
+              <button
+                type="button"
+                onClick={() => {
+                  setDecoySandboxOpen(false);
+                  setLockOverlayOpen(true);
+                  setPinEntry('');
+                }}
+                className="inline-flex items-center gap-1 rounded border border-zinc-700 px-2 py-0.5 text-[10px] text-zinc-300"
+              >
+                <Lock className="h-3 w-3" />
+                <span>Lock</span>
+              </button>
+            </div>
+            <div className="flex-1 space-y-2.5 p-3.5 text-xs">
+              <div className="rounded-lg border border-zinc-800 bg-[#141720] p-3">
+                <div className="font-medium text-zinc-100">Grocery List</div>
+                <p className="mt-1 text-zinc-400">Milk, bread, coffee beans, bananas, olive oil</p>
+              </div>
+              <div className="rounded-lg border border-zinc-800 bg-[#141720] p-3">
+                <div className="font-medium text-zinc-100">Weekend Errands</div>
+                <p className="mt-1 text-zinc-400">Pick up laundry at 4 PM, renew gym pass</p>
+              </div>
+              <p className="pt-2 text-[10px] text-zinc-500">
+                Duress Sandbox active: Real Vault keys, chats, and videos are untouched and completely inaccessible here.
+              </p>
+            </div>
+          </div>
+        )}
+
+        {/* Android Share-to-AI Receiver Modal Overlay */}
+        {incomingShareText && (
+          <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/80 p-4">
+            <div className="w-full space-y-2.5 rounded-xl border border-zinc-700 bg-[#0B0E14] p-3.5 text-xs">
+              <div className="font-semibold text-zinc-100">Share to OmniAI Studio (ACTION_SEND)</div>
+              <p className="rounded border border-zinc-800 bg-black p-2 font-mono text-[11px] text-zinc-300">
+                {incomingShareText}
+              </p>
+              <button
+                type="button"
+                onClick={() => {
+                  setChatInput(incomingShareText);
+                  setIncomingShareText(null);
+                  setShowSettingsHub(false);
+                  setActiveTab('chat');
+                  triggerToast('Routed shared text to AI Chat Studio.');
+                }}
+                className="w-full rounded py-1.5 font-semibold text-zinc-950"
+                style={{ backgroundColor: activeAccent.hex }}
+              >
+                Send to AI Chat
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setTopic(incomingShareText);
+                  setIncomingShareText(null);
+                  setShowSettingsHub(false);
+                  setActiveTab('director');
+                  triggerToast('Routed shared text to Video Storyboard.');
+                }}
+                className="w-full rounded border border-zinc-700 bg-zinc-900 py-1.5 font-medium text-zinc-200 hover:bg-zinc-800"
+              >
+                Create Video Storyboard
+              </button>
+              <button
+                type="button"
+                onClick={() => setIncomingShareText(null)}
+                className="w-full py-1 text-[11px] text-zinc-400 hover:text-zinc-200"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Material 3 Bottom Navigation Bar (v5.1 Strictly 4 Clean Tabs) */}
+        {!showSettingsHub && (
+          <nav
+            aria-label="Android app tabs"
+            className="grid grid-cols-4 border-t border-[#232330] bg-[#13131A] py-1.5"
+          >
+            {(
+              [
+                { id: 'home', label: 'Home', icon: Home },
+                { id: 'chat', label: 'Chat', icon: MessageSquare },
+                { id: 'director', label: 'Studio', icon: Film },
+                { id: 'projects', label: 'Projects', icon: FolderKanban },
+              ] as const
+            ).map((tab) => {
+              const Icon = tab.icon;
+              const selected = activeTab === tab.id;
+              return (
+                <button
+                  key={tab.id}
+                  type="button"
+                  onClick={() => setActiveTab(tab.id)}
+                  className="flex flex-col items-center gap-0.5 py-1 text-[10px] font-medium transition-colors"
+                  style={{ color: selected ? activeAccent.hex : '#71717a' }}
+                >
+                  <Icon className="h-4 w-4" />
+                  <span>{tab.label}</span>
+                </button>
+              );
+            })}
+          </nav>
+        )}
+      </div>
+
+      {/* Right Column: Native Implementation Architecture & Source Jump */}
+      <div className="mt-6 w-full max-w-xl space-y-5 lg:mt-0">
+        <div className="space-y-3">
+          <div>
+            <h2 className="text-xl font-semibold tracking-tight text-zinc-100">
+              OmniAI-Studio v5.1 · AMOLED Bento Preview
+            </h2>
+            <p className="mt-1.5 text-sm leading-6 text-zinc-400">
+              Pure UI/UX Declutter &amp; Progressive Disclosure refactor with 100% of v1.0–v4.5 backends intact: Unified Design Tokens (#09090C / #13131A / #232330 / #1B1B25), 4-Tab Hub-and-Spoke Shell + Slide-Out Drawer, Home Bento Command Dashboard, Chat Zen Focus Mode &amp; Plus (+) ModalBottomSheet, 3-Step Video Studio + Render Settings Sheet, Sticky Git Auto-Push Pill &amp; Full-Screen Code Editor.
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                setDecoySandboxOpen(false);
+                setLockOverlayOpen(false);
+                setShowSettingsHub(false);
+                setActiveTab('chat');
+                setChatInput('Quick Voice Tile (LAUNCH_VOICE_CHAT=true): Draft a 4-scene AI security brief');
+                triggerToast('QuickVoiceTileService launched Tab 0 Voice Dictation!');
+              }}
+              className="inline-flex items-center gap-1.5 rounded-md border border-zinc-700 bg-zinc-900 px-2.5 py-1.5 text-xs font-medium text-zinc-200 hover:border-emerald-500/50 hover:text-emerald-300 transition-colors whitespace-nowrap"
+            >
+              <Mic className="h-3.5 w-3.5" />
+              <span>Quick Voice Tile</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setLockOverlayOpen(true);
+                setPinEntry('');
+                setPinError(null);
+              }}
+              className="inline-flex items-center gap-1.5 rounded-md border border-zinc-700 bg-zinc-900 px-2.5 py-1.5 text-xs font-medium text-zinc-200 hover:border-amber-500/50 hover:text-amber-300 transition-colors whitespace-nowrap"
+            >
+              <Lock className="h-3.5 w-3.5" />
+              <span>Test Duress PIN</span>
+            </button>
+            <button
+              type="button"
+              onClick={() =>
+                setIncomingShareText('Breakthrough open-source 1.3B video diffusion models running on dual T4 GPUs')
+              }
+              className="inline-flex items-center gap-1.5 rounded-md border border-zinc-700 bg-zinc-900 px-2.5 py-1.5 text-xs font-medium text-zinc-200 hover:border-emerald-500/50 hover:text-emerald-300 transition-colors whitespace-nowrap"
+            >
+              <Share2 className="h-3.5 w-3.5" />
+              <span>Share-to-AI</span>
+            </button>
+          </div>
+        </div>
+
+        <div className="divide-y divide-zinc-800/80 rounded-xl border border-zinc-800 bg-[#0B0E14]">
+          {(
+            [
+              {
+                key: 'design-tokens',
+                title: 'v5.1 · Unified AMOLED Design System & Spacing Grid',
+                detail:
+                  'Canvas #09090C, Level 1 Surface #13131A + 1dp #232330 border, Level 2 #1B1B25, 12% dynamic accent containers, 16dp/20dp/48dp touch grid, max-2-action cards with overflow menu, OmniEmptyState & OmniSkeletonCard.',
+                source: 'app/src/main/java/com/omniai/studio/ui/theme/DesignTokens.kt',
+              },
+              {
+                key: 'nav-shell',
+                title: 'v5.1 · Hub-and-Spoke Shell (4-Tab Bar + Slide-Out Drawer + Slim 56dp TopAppBar)',
+                detail:
+                  'Strictly 4 default tabs (Home, Chat, Studio, Projects), Hamburger Drawer grouped into Create & Media / Developer & Agents / System & Vault, Niche Switcher Sheet & pulsing Live Studio Activity Sheet.',
+                source: 'app/src/main/java/com/omniai/studio/ui/components/AppNavigationShell.kt',
+              },
+              {
+                key: 'home-bento',
+                title: 'v5.1 · Home Bento Command Dashboard',
+                detail:
+                  'Hero Active Niche + Next Suggested Video Episode with 1-tap "Auto-Type & Create", circular Kaggle GPU Quota ring (X/30h), Active Project diff & 1-tap Push, Quick AI Voice, Terminal & Recent Activity Strip.',
+                source: 'app/src/main/java/com/omniai/studio/ui/screens/HomeBentoScreen.kt',
+              },
+              {
+                key: 'chat-minimal',
+                title: 'v5.1 · Minimalist Chat + Zen Focus Mode + Plus (+) Sheet',
+                detail:
+                  'Zen Focus Mode hides TopBar & BottomBar for distraction-free reading, rounded input capsule, Auto-Typer strip hidden when empty, and 2-row Plus (+) ModalBottomSheet housing OCR, Docs, URL, Incognito, Arena & Memory.',
+                source: 'app/src/main/java/com/omniai/studio/ui/screens/ChatStudioScreen.kt',
+              },
+              {
+                key: 'video-wizard',
+                title: 'v5.1 · 3-Step Video Studio Wizard & Render Settings Sheet',
+                detail:
+                  'Segmented 1. Idea | 2. Scenes | 3. Render flow, compact summary pill opening Render Settings ModalBottomSheet, Audit Hook + YT/IG/FB SEO actions, Live Kaggle Stepper & Resumable Download progress card.',
+                source: 'app/src/main/java/com/omniai/studio/ui/screens/VideoDirectorScreen.kt',
+              },
+              {
+                key: 'projects-sticky',
+                title: 'v5.1 · Projects Hub: Sticky Git Auto-Push Pill & Full-Screen Code Editor',
+                detail:
+                  'Floating "Git Auto-Push (N changes)" pill when diffs exist, full-screen distraction-free monospace Code Editor with slim Save/Undo/Diff top bar, plus all v4.5 Kanban, AI Splitter & Actions Monitor tools.',
+                source: 'app/src/main/java/com/omniai/studio/ui/screens/ProjectDashboardScreen.kt',
+              },
+            ] as const
+          ).map((item) => (
+            <div key={item.key} className="flex items-start justify-between gap-4 p-4">
+              <div>
+                <h3 className="text-sm font-medium text-zinc-100">{item.title}</h3>
+                <p className="mt-1 text-xs leading-5 text-zinc-400">{item.detail}</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => onInspectSource(item.source)}
+                className="shrink-0 rounded-md border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-xs font-medium text-zinc-200 hover:border-emerald-500/50 hover:text-emerald-300 transition-colors whitespace-nowrap"
+              >
+                Open Kotlin
+              </button>
+            </div>
+          ))}
+        </div>
+
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-zinc-800 bg-[#0B0E14] px-4 py-3 text-xs text-zinc-400">
+          <div className="flex items-center gap-2">
+            <Lock className="h-4 w-4 text-emerald-400 shrink-0" />
+            <span>v5.1 Pure Compose Material 3 Refactor (Zero New Gradle Deps):</span>
+          </div>
+          <div className="flex flex-wrap items-center gap-3 shrink-0">
+            <button
+              type="button"
+              onClick={() => onInspectSource('app/src/main/java/com/omniai/studio/ui/theme/DesignTokens.kt')}
+              className="font-mono text-emerald-400 hover:text-emerald-300 whitespace-nowrap"
+            >
+              DesignTokens.kt
+            </button>
+            <button
+              type="button"
+              onClick={() => onInspectSource('app/src/main/java/com/omniai/studio/ui/components/AppNavigationShell.kt')}
+              className="font-mono text-emerald-400 hover:text-emerald-300 whitespace-nowrap"
+            >
+              AppNavigationShell.kt
+            </button>
+            <button
+              type="button"
+              onClick={() => onInspectSource('app/src/main/java/com/omniai/studio/ui/screens/HomeBentoScreen.kt')}
+              className="font-mono text-emerald-400 hover:text-emerald-300 whitespace-nowrap"
+            >
+              HomeBentoScreen.kt
+            </button>
+            <button
+              type="button"
+              onClick={() => onInspectSource('app/src/main/java/com/omniai/studio/ui/screens/VideoDirectorScreen.kt')}
+              className="font-mono text-emerald-400 hover:text-emerald-300 whitespace-nowrap"
+            >
+              VideoDirectorScreen.kt
+            </button>
+            <button
+              type="button"
+              onClick={() => onInspectSource('app/src/main/java/com/omniai/studio/ui/screens/ProjectDashboardScreen.kt')}
+              className="font-mono text-emerald-400 hover:text-emerald-300 whitespace-nowrap"
+            >
+              ProjectDashboardScreen.kt
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
