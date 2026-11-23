@@ -147,7 +147,7 @@ export const BuildAuditView: React.FC<BuildAuditViewProps> = ({ files, onInspect
               </button>
             </div>
             <p className="text-xs leading-6 text-zinc-400">
-              Reads <code className="text-zinc-200">/kaggle/input/video-tasks-input/scenes.json</code>, synthesizes Edge-TTS narration and timed word-boundary SRT subtitles, shards scenes across isolated <code className="text-zinc-200">CUDA_VISIBLE_DEVICES=0</code> and <code className="text-zinc-200">1</code> subprocesses running <code className="text-zinc-200">Wan-AI/Wan2.1-T2V-1.3B-Diffusers</code> (bfloat16 transformer + float32 VAE), muxes each <code className="text-zinc-200">scene_X.mp4</code> with optional yellow/white burned subtitles, and outputs <code className="text-zinc-200">final_video.mp4</code>.
+              Reads <code className="text-zinc-200">/kaggle/input/video-tasks-input/scenes.json</code>, synthesizes Edge-TTS narration and timed word-boundary SRT subtitles, shards scenes across isolated <code className="text-zinc-200">CUDA_VISIBLE_DEVICES=0</code> and <code className="text-zinc-200">1</code> subprocesses running <code className="text-zinc-200">Wan-AI/Wan2.1-T2V-1.3B-Diffusers</code>, outputs <code className="text-zinc-200">final_video.mp4</code>, and directly uploads to <code className="text-zinc-200">YouTube Data API v3</code> (with custom <code className="text-zinc-200">thumb.jpg</code> &amp; first comment), optional <code className="text-zinc-200">Meta FB/IG Reels</code>, and up to <code className="text-zinc-200">2 GB</code> Telegram via headless Telethon MTProto.
             </p>
           </div>
 
@@ -163,7 +163,7 @@ export const BuildAuditView: React.FC<BuildAuditViewProps> = ({ files, onInspect
               </button>
             </div>
             <p className="text-xs leading-6 text-zinc-400">
-              Auto-increments <code className="text-zinc-200">VERSION_CODE</code> and <code className="text-zinc-200">VERSION_NAME=5.1.&lt;run_number&gt;</code>, signs release builds when keystore secrets exist or falls back cleanly to <code className="text-zinc-200">assembleDebug</code>, publishes <code className="text-zinc-200">OmniAI-Studio-v5.1.N.apk</code> via <code className="text-zinc-200">softprops/action-gh-release@v2</code>, and pushes Kaggle kernel updates on <code className="text-zinc-200">kaggle_worker/**</code> changes.
+              Auto-increments <code className="text-zinc-200">VERSION_CODE</code> and <code className="text-zinc-200">VERSION_NAME=5.5.&lt;run_number&gt;</code>, signs release builds when keystore secrets exist or falls back cleanly to <code className="text-zinc-200">assembleDebug</code>, publishes <code className="text-zinc-200">OmniAI-Studio-v5.5.N.apk</code> via <code className="text-zinc-200">softprops/action-gh-release@v2</code>, pushes Kaggle worker updates on <code className="text-zinc-200">kaggle_worker/**</code> changes, and runs <code className="text-zinc-200">keep-supabase-alive.yml</code> every 4 days to keep Supabase PostgreSQL active.
             </p>
           </div>
         </section>

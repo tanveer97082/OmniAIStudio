@@ -20,7 +20,7 @@
             android:layout_weight="1"
             android:ellipsize="end"
             android:maxLines="1"
-            android:text="OmniAI Studio v4.5"
+            android:text="OmniAI Studio v5.5"
             android:textColor="#00E676"
             android:textSize="13sp"
             android:textStyle="bold" />

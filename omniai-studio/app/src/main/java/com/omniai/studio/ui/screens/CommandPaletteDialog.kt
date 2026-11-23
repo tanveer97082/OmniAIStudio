@@ -16,6 +16,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AdminPanelSettings
 import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material.icons.filled.ChatBubble
 import androidx.compose.material.icons.filled.CloudSync
@@ -105,6 +106,14 @@ fun CommandPaletteDialog(
                 subtitle = "Chats Archive, Normalized Scripts/Scenes, YT/IG/FB SEO & CSV Export",
                 icon = Icons.Filled.Storage,
                 onExecute = { onOpenOverlay("NONE"); onNavigateTab(StudioTabId.CONTENT_HUB); onDismiss() }
+            ),
+            PaletteActionItem(
+                id = "act_cloud_account",
+                category = "Quick Action",
+                title = "Open Cloud DB & Roles (Supabase Sync)",
+                subtitle = "Google OAuth PKCE, GZIP Text Delta Sync, Team RBAC & Pending Approvals",
+                icon = Icons.Filled.AdminPanelSettings,
+                onExecute = { onOpenOverlay("CLOUD_ACCOUNT"); onDismiss() }
             ),
             PaletteActionItem(
                 id = "act_backup",

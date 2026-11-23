@@ -31,6 +31,36 @@ private data class TelegramGetMeResponse(
     val description: String? = null
 )
 
+@Serializable
+private data class TelegramChatInfo(
+    val id: Long = 0L,
+    val title: String? = null,
+    val username: String? = null,
+    val first_name: String? = null,
+    val type: String = ""
+)
+
+@Serializable
+private data class TelegramUpdateMessage(
+    val chat: TelegramChatInfo? = null
+)
+
+@Serializable
+private data class TelegramUpdateItem(
+    val update_id: Long = 0L,
+    val message: TelegramUpdateMessage? = null,
+    val channel_post: TelegramUpdateMessage? = null,
+    val edited_message: TelegramUpdateMessage? = null,
+    val my_chat_member: TelegramUpdateMessage? = null
+)
+
+@Serializable
+private data class TelegramGetUpdatesResponse(
+    val ok: Boolean = false,
+    val result: List<TelegramUpdateItem> = emptyList(),
+    val description: String? = null
+)
+
 /**
  * Layer 3: Telegram Bot Cloud Archive & Render Alert Client.
  * Uses OkHttp3 Multipart POST to send encrypted `.omniai.enc` snapshots,
@@ -71,12 +101,62 @@ class TelegramBackupClient(
             }
 
             sendStatusMessage(
-                text = "OmniAI-Studio v2.5 connected ($botHandle). Encrypted backup & render alerts active.",
+                text = "OmniAI-Studio v5.2 connected ($botHandle). Encrypted backup, 2 GB Kaggle MTProto uploader & render alerts active.",
                 overrideToken = token,
                 overrideChatId = chatId
             ).getOrThrow()
 
             "Connected to Telegram $botHandle and delivered test ping."
+        }
+    }
+
+    /**
+     * v5.2: 1-Tap Auto-Detect Chat ID via Telegram Bot API /getUpdates.
+     * Scans recent messages, channel posts, edited messages, and bot membership updates
+     * so users never need to manually inspect JSON responses.
+     */
+    suspend fun autoDetectChatId(
+        overrideToken: String = vault.telegramBotToken
+    ): Result<Pair<String, String>> = withContext(Dispatchers.IO) {
+        runCatching {
+            val token = overrideToken.trim()
+            require(token.isNotBlank()) { "Enter TG_BOT_TOKEN first before detecting Chat ID." }
+
+            val req = Request.Builder()
+                .url("https://api.telegram.org/bot$token/getUpdates?limit=25")
+                .get()
+                .build()
+
+            client.newCall(req).execute().use { resp ->
+                val raw = resp.body?.string().orEmpty()
+                if (!resp.isSuccessful) {
+                    val safeRaw = raw.replace(token, "***").take(140)
+                    throw IOException("Telegram /getUpdates HTTP ${resp.code}: $safeRaw")
+                }
+                val parsed = json.decodeFromString<TelegramGetUpdatesResponse>(raw)
+                if (!parsed.ok) {
+                    val safeDesc = (parsed.description ?: "Telegram /getUpdates rejected.").replace(token, "***")
+                    throw IOException(safeDesc)
+                }
+                val latestChat = parsed.result
+                    .sortedByDescending { it.update_id }
+                    .firstNotNullOfOrNull { item ->
+                        item.message?.chat
+                            ?: item.channel_post?.chat
+                            ?: item.edited_message?.chat
+                            ?: item.my_chat_member?.chat
+                    }
+                    ?: throw IllegalStateException(
+                        "No recent messages found. Open your bot in Telegram, tap Start or send 'hi' (or post in your channel where the bot is admin), then tap Auto-Detect again."
+                    )
+
+                val chatId = latestChat.id.toString()
+                val label = latestChat.title?.takeIf { it.isNotBlank() }
+                    ?: latestChat.username?.takeIf { it.isNotBlank() }?.let { "@$it" }
+                    ?: latestChat.first_name?.takeIf { it.isNotBlank() }
+                    ?: latestChat.type.ifBlank { "Telegram Chat" }
+                chatId to label
+            }
         }
     }
 

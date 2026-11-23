@@ -6,7 +6,7 @@ plugins {
 }
 
 val buildVersionCode: Int = (project.findProperty("VERSION_CODE") as? String)?.toIntOrNull() ?: 1
-val buildVersionName: String = (project.findProperty("VERSION_NAME") as? String) ?: "5.1.1"
+val buildVersionName: String = (project.findProperty("VERSION_NAME") as? String) ?: "5.5.1"
 
 android {
     namespace = "com.omniai.studio"

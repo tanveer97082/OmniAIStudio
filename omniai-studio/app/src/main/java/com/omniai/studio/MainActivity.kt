@@ -44,6 +44,7 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
+import com.omniai.studio.cloud.CloudUserRole
 import com.omniai.studio.security.PrivacyShieldHelper
 import com.omniai.studio.service.QuickVoiceTileService
 import com.omniai.studio.settings.QuickFabAction
@@ -54,11 +55,13 @@ import com.omniai.studio.ui.screens.AppLockOverlay
 import com.omniai.studio.ui.screens.BackupSyncCenterScreen
 import com.omniai.studio.ui.screens.ChainRunnerScreen
 import com.omniai.studio.ui.screens.ChatStudioScreen
+import com.omniai.studio.ui.screens.CloudAccountScreen
 import com.omniai.studio.ui.screens.CommandPaletteDialog
 import com.omniai.studio.ui.screens.ContentHubScreen
 import com.omniai.studio.ui.screens.DecoySandboxScreen
 import com.omniai.studio.ui.screens.DownloadsGalleryScreen
 import com.omniai.studio.ui.screens.HomeBentoScreen
+import com.omniai.studio.ui.screens.PendingApprovalLockScreen
 import com.omniai.studio.ui.screens.ProjectDashboardScreen
 import com.omniai.studio.ui.screens.SettingsHubScreen
 import com.omniai.studio.ui.screens.TerminalScreen
@@ -146,6 +149,9 @@ class MainActivity : FragmentActivity() {
                 val hasMasterPin by viewModel.hasMasterPin.collectAsState()
                 val hasDecoyPin by viewModel.hasDecoyPin.collectAsState()
                 val flagSecure by viewModel.flagSecureEnabled.collectAsState()
+                val cloudSession by viewModel.cloudSessionState.collectAsState()
+                val cloudRole by viewModel.cloudRole.collectAsState()
+                val isRefreshingCloudStatus by viewModel.isRefreshingCloudStatus.collectAsState()
                 val toastMessage by viewModel.toastMessage.collectAsState()
                 val pendingSharedText by viewModel.pendingSharedText.collectAsState()
                 val pendingVoiceAutoLaunch by viewModel.pendingVoiceAutoLaunch.collectAsState()
@@ -172,6 +178,11 @@ class MainActivity : FragmentActivity() {
                     if (target != StudioTabId.CHAT) isZenFocusMode = false
                     if (target != StudioTabId.PROJECTS) isFullscreenCodeEditor = false
                     selectedTabName = target.name
+                }
+
+                fun runGuideCommandInTerminal(command: String) {
+                    navigateToTab(StudioTabId.TERMINAL)
+                    viewModel.executeTerminalCommand(command)
                 }
 
                 LaunchedEffect(flagSecure) {
@@ -300,9 +311,16 @@ class MainActivity : FragmentActivity() {
                                     onBack = { activeOverlay = "NONE" },
                                     onOpenDirector = { navigateToTab(StudioTabId.DIRECTOR) },
                                     onOpenBackupCenter = { activeOverlay = "BACKUP_CENTER" },
+                                    onOpenCloudAccount = { activeOverlay = "CLOUD_ACCOUNT" },
                                     onOpenAnalytics = { activeOverlay = "ANALYTICS" },
                                     onOpenThemeStudio = { activeOverlay = "THEME_STUDIO" },
-                                    onOpenTerminal = { navigateToTab(StudioTabId.TERMINAL) }
+                                    onOpenTerminal = { navigateToTab(StudioTabId.TERMINAL) },
+                                    onRunGuideCommandInTerminal = ::runGuideCommandInTerminal
+                                )
+                                "CLOUD_ACCOUNT" -> CloudAccountScreen(
+                                    viewModel = viewModel,
+                                    onBack = { activeOverlay = "NONE" },
+                                    onRunGuideCommandInTerminal = ::runGuideCommandInTerminal
                                 )
                                 "THEME_STUDIO" -> UiThemeStudioScreen(
                                     viewModel = viewModel,
@@ -310,7 +328,8 @@ class MainActivity : FragmentActivity() {
                                 )
                                 "BACKUP_CENTER" -> BackupSyncCenterScreen(
                                     viewModel = viewModel,
-                                    onBack = { activeOverlay = "NONE" }
+                                    onBack = { activeOverlay = "NONE" },
+                                    onRunGuideCommandInTerminal = ::runGuideCommandInTerminal
                                 )
                                 "ANALYTICS" -> AnalyticsScreen(
                                     viewModel = viewModel,
@@ -374,7 +393,9 @@ class MainActivity : FragmentActivity() {
                                             biometricManager = app.biometricAuthManager,
                                             viewModel = viewModel,
                                             onOpenSettingsHub = { activeOverlay = "SETTINGS_HUB" },
-                                            onOpenBackupCenter = { activeOverlay = "BACKUP_CENTER" }
+                                            onOpenBackupCenter = { activeOverlay = "BACKUP_CENTER" },
+                                            onOpenCloudAccount = { activeOverlay = "CLOUD_ACCOUNT" },
+                                            onRunGuideCommandInTerminal = ::runGuideCommandInTerminal
                                         )
                                     }
                                 }
@@ -508,6 +529,15 @@ class MainActivity : FragmentActivity() {
                             },
                             onVerifyPin = { pin -> viewModel.verifyUnlockPin(pin) }
                         )
+                    } else if (cloudRole == CloudUserRole.PENDING) {
+                        PendingApprovalLockScreen(
+                            email = cloudSession.email,
+                            deviceName = cloudSession.deviceName,
+                            isRefreshing = isRefreshingCloudStatus,
+                            onRefreshStatus = { viewModel.refreshCloudApprovalStatus() },
+                            onUseOfflineLocal = { viewModel.enableOfflineLocalMode() },
+                            onSignOut = { viewModel.signOutCloud() }
+                        )
                     }
                 }
             }
@@ -549,6 +579,17 @@ class MainActivity : FragmentActivity() {
         if (requestedTab in 0..8) {
             incoming.removeExtra(EXTRA_LAUNCH_TAB)
             viewModel.requestLaunchTab(requestedTab)
+        }
+        if (incoming.action == Intent.ACTION_VIEW) {
+            val callbackUri = incoming.data
+            if (callbackUri != null &&
+                callbackUri.scheme.equals("omniaistudio", ignoreCase = true) &&
+                callbackUri.host.equals("auth-callback", ignoreCase = true)
+            ) {
+                incoming.data = null
+                viewModel.handleCloudAuthCallback(callbackUri)
+                return
+            }
         }
         if (incoming.action == Intent.ACTION_SEND && incoming.type?.startsWith("text/") == true) {
             val sharedText = incoming.getStringExtra(Intent.EXTRA_TEXT)

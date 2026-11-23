@@ -490,7 +490,7 @@ class AiStreamingClient(
             }
         }
 
-        val raw = runCatching { completeSinglePrompt(sysPrompt, userPrompt) }.getOrDefault("")
+        val raw = runCatching { completeSinglePrompt(sysPrompt, userPrompt).first }.getOrDefault("")
         val parsed = runCatching {
             json.decodeFromString<AiTaskPlanPayload>(extractJsonObject(raw)).tasks
         }.getOrDefault(emptyList())
@@ -542,6 +542,7 @@ class AiStreamingClient(
 
         val generated = runCatching {
             completeSinglePrompt(sysPrompt, userPrompt)
+                .first
                 .lineSequence()
                 .map { it.trim().trim('"', '\'', '`') }
                 .firstOrNull { it.isNotBlank() }

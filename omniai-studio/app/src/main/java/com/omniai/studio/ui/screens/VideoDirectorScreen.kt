@@ -40,6 +40,7 @@ import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.Campaign
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CloudDownload
+import androidx.compose.material.icons.filled.CloudUpload
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DocumentScanner
@@ -104,6 +105,10 @@ import com.omniai.studio.data.local.VideoSceneTemplate
 import com.omniai.studio.data.local.VideoSceneTemplateLibrary
 import com.omniai.studio.data.local.VideoSceneTemplateOptions
 import com.omniai.studio.data.local.VideoTemplateCategory
+import com.omniai.studio.media.AdobeAppPickerDialog
+import com.omniai.studio.media.AdobeTargetApp
+import com.omniai.studio.media.ProAdobeWorkflowCard
+import com.omniai.studio.media.ThumbnailStudioSheet
 import com.omniai.studio.ui.components.AutoTypePromptBar
 import com.omniai.studio.ui.components.NicheEditorDialog
 import com.omniai.studio.ui.theme.AmberWarning
@@ -171,6 +176,10 @@ fun VideoDirectorScreen(
     val nextCommands by viewModel.activeNicheNextCommands.collectAsState()
     val seriesEpisodes by viewModel.activeNicheSeriesEpisodes.collectAsState()
     val isRegeneratingNextCommands by viewModel.isRegeneratingNextCommands.collectAsState()
+    val adobeExpressStatus by viewModel.adobeExpressStatus.collectAsState()
+    val adobeFireflyStatus by viewModel.adobeFireflyStatus.collectAsState()
+    val isLaunchingAdobeBridge by viewModel.isLaunchingAdobeBridge.collectAsState()
+    var adobePickerTarget by remember { mutableStateOf<AdobeTargetApp?>(null) }
     val isGeneratingSeriesPlan by viewModel.isGeneratingSeriesPlan.collectAsState()
     val isAuditingScript by viewModel.isAuditingScript.collectAsState()
     val isOptimizingScenes by viewModel.isOptimizingScenes.collectAsState()
@@ -179,6 +188,10 @@ fun VideoDirectorScreen(
     val pendingDirectorAutoTypeText by viewModel.pendingDirectorAutoTypeText.collectAsState()
     val isAutoFillingNiche by viewModel.isAutoFillingNiche.collectAsState()
     val hashtagPacks by viewModel.hashtagPacks.collectAsState()
+    val youTubeProfiles by viewModel.youTubeProfiles.collectAsState()
+    val isUploadingToYouTube by viewModel.isUploadingToYouTube.collectAsState()
+    val youTubeUploadProgress by viewModel.youTubeUploadProgress.collectAsState()
+    val youTubeUploadStatus by viewModel.youTubeUploadStatus.collectAsState()
 
     val selectedCharacter = remember(characterProfiles, selectedCharacterDnaId) {
         characterProfiles.firstOrNull { it.id == selectedCharacterDnaId }
@@ -209,6 +222,7 @@ fun VideoDirectorScreen(
     var editingNiche by remember { mutableStateOf<NicheEntity?>(null) }
     var showSeriesPlannerSheet by remember { mutableStateOf(false) }
     var showScriptAuditorDialog by remember { mutableStateOf(false) }
+    var thumbnailStudioTarget by remember { mutableStateOf<Pair<String?, String>?>(null) }
 
     // Template Admin Studio state
     var templateAdminMode by remember { mutableStateOf(false) }
@@ -1265,7 +1279,10 @@ fun VideoDirectorScreen(
                                         aspectRatio = aspectRatio,
                                         voice = voice,
                                         burnSubtitles = burnSubtitles,
-                                        downloadIndividualScenes = downloadIndividualScenes
+                                        downloadIndividualScenes = downloadIndividualScenes,
+                                        directYoutubeUpload = appSettings.directKaggleYoutubeUpload,
+                                        youtubePrivacyStatus = appSettings.youtubeDefaultPrivacy,
+                                        directFbIgUpload = appSettings.directKaggleMetaReelsUpload
                                     )
                                     activeStep = 2
                                 },
@@ -1464,7 +1481,72 @@ fun VideoDirectorScreen(
                     item {
                         OmniSectionHeader(
                             title = "Background Batch Queue (${renderJobs.size})",
-                            subtitle = "Live Kaggle T4 x2 stepper & status"
+                            subtitle = "Live Kaggle T4 x2 stepper & status",
+                            trailing = {
+                                OutlinedButton(
+                                    onClick = {
+                                        val latestPath = renderJobs.firstOrNull { !it.outputFilePath.isNullOrBlank() }?.outputFilePath
+                                        thumbnailStudioTarget = latestPath to draftTitle.ifBlank { topic.ifBlank { "OmniAI Video" } }
+                                    }
+                                ) {
+                                    Icon(Icons.Filled.Image, contentDescription = null, modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("Thumbnails")
+                                }
+                            }
+                        )
+                    }
+
+                    if (isUploadingToYouTube || youTubeUploadStatus.isNotBlank()) {
+                        item {
+                            OmniSurfaceCard(borderColor = EmeraldAccent.copy(alpha = 0.6f)) {
+                                Text(
+                                    text = if (isUploadingToYouTube) "YouTube Resumable Upload ($youTubeUploadProgress%)" else "YouTube Direct Uploader",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    color = EmeraldAccent
+                                )
+                                if (youTubeUploadStatus.isNotBlank()) {
+                                    Text(
+                                        text = youTubeUploadStatus,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                if (isUploadingToYouTube) {
+                                    LinearProgressIndicator(
+                                        progress = { (youTubeUploadProgress / 100f).coerceIn(0f, 1f) },
+                                        modifier = Modifier.fillMaxWidth()
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    // v5.4 Pro Adobe Workflow (Native Installed Apps — Zero Browser / Zero Custom Tabs)
+                    item {
+                        val latestRenderedJob = renderJobs.firstOrNull {
+                            it.status == "COMPLETED" && !it.outputFilePath.isNullOrBlank()
+                        }
+                        val targetTitle = latestRenderedJob?.title?.ifBlank { draftTitle }
+                            ?: draftTitle.ifBlank { activeNiche?.name ?: "OmniAI Video" }
+                        ProAdobeWorkflowCard(
+                            expressStatus = adobeExpressStatus,
+                            fireflyStatus = adobeFireflyStatus,
+                            isBusy = isLaunchingAdobeBridge,
+                            onGenerateInFirefly = {
+                                viewModel.launchAdobeFireflyForVideo(
+                                    title = targetTitle,
+                                    aspectRatio = aspectRatio
+                                )
+                            },
+                            onEditFrameInExpress = {
+                                viewModel.launchAdobeExpressForVideo(
+                                    videoFilePath = latestRenderedJob?.outputFilePath,
+                                    title = targetTitle,
+                                    hookText = targetTitle.split(" ").take(3).joinToString(" ")
+                                )
+                            },
+                            onChangeBoundApp = { target -> adobePickerTarget = target }
                         )
                     }
 
@@ -1481,7 +1563,10 @@ fun VideoDirectorScreen(
                                             aspectRatio = aspectRatio,
                                             voice = voice,
                                             burnSubtitles = burnSubtitles,
-                                            downloadIndividualScenes = downloadIndividualScenes
+                                            downloadIndividualScenes = downloadIndividualScenes,
+                                            directYoutubeUpload = appSettings.directKaggleYoutubeUpload,
+                                            youtubePrivacyStatus = appSettings.youtubeDefaultPrivacy,
+                                            directFbIgUpload = appSettings.directKaggleMetaReelsUpload
                                         )
                                     } else {
                                         activeStep = 0
@@ -1530,13 +1615,46 @@ fun VideoDirectorScreen(
                                         .clip(RoundedCornerShape(4.dp))
                                 )
 
-                                // Max 2 actions
-                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                // Max 2 primary actions + overflow for Thumbnail Studio / YouTube Upload
+                                Row(
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
                                     if (job.status == "FAILED") {
                                         Button(onClick = { viewModel.retryRenderJob(job) }) {
                                             Icon(Icons.Filled.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
                                             Spacer(modifier = Modifier.width(4.dp))
                                             Text("Retry")
+                                        }
+                                    } else if (job.status == "COMPLETED" && job.outputFilePath.isNullOrBlank()) {
+                                        Button(onClick = { viewModel.downloadKaggleCopyToPhone(job) }) {
+                                            Icon(Icons.Filled.CloudDownload, contentDescription = null, modifier = Modifier.size(16.dp))
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                            Text("Download Copy to Phone")
+                                        }
+                                    } else if (job.status == "COMPLETED" && !job.outputFilePath.isNullOrBlank()) {
+                                        Button(
+                                            enabled = !isUploadingToYouTube,
+                                            onClick = {
+                                                viewModel.uploadVideoToYouTube(
+                                                    videoFilePath = job.outputFilePath,
+                                                    title = job.title,
+                                                    description = "Rendered with OmniAI-Studio Dual-GPU Pipeline.",
+                                                    tags = listOf("OmniAI", "AI", "Shorts"),
+                                                    privacyStatus = appSettings.youtubeDefaultPrivacy
+                                                )
+                                            }
+                                        ) {
+                                            Icon(Icons.Filled.CloudUpload, contentDescription = null, modifier = Modifier.size(16.dp))
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                            Text("Upload YT")
+                                        }
+                                        OutlinedButton(onClick = {
+                                            thumbnailStudioTarget = job.outputFilePath to job.title
+                                        }) {
+                                            Icon(Icons.Filled.Image, contentDescription = null, modifier = Modifier.size(16.dp))
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                            Text("Thumbnail")
                                         }
                                     }
                                     OutlinedButton(onClick = { viewModel.deleteRenderJob(job) }) {
@@ -1751,6 +1869,103 @@ fun VideoDirectorScreen(
                 ) {
                     Text("Also Download Individual scene_X.mp4", style = MaterialTheme.typography.bodyMedium)
                     Switch(checked = downloadIndividualScenes, onCheckedChange = { downloadIndividualScenes = it })
+                }
+
+                HorizontalDivider(color = colorScheme.outline)
+
+                // v5.2 Direct Kaggle -> Telegram 2 GB MTProto Uploader Controls
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Direct Kaggle → Telegram Upload (Up to 2 GB)", style = MaterialTheme.typography.bodyMedium)
+                        Text(
+                            "Kaggle worker uploads via Telethon MTProto directly to your chat/channel",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Switch(
+                        checked = appSettings.directKaggleTelegramUpload,
+                        onCheckedChange = { viewModel.setDirectKaggleTelegramUpload(it) }
+                    )
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Save Mobile Data (Skip Phone Download if Sent to Telegram)", style = MaterialTheme.typography.bodyMedium)
+                        Text(
+                            "Skips downloading large MP4 to phone; tap 'Download Copy to Phone' anytime",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Switch(
+                        checked = appSettings.skipPhoneDownloadWhenSentToTelegram,
+                        enabled = appSettings.directKaggleTelegramUpload,
+                        onCheckedChange = { viewModel.setSkipPhoneDownloadWhenSentToTelegram(it) }
+                    )
+                }
+
+                HorizontalDivider(color = colorScheme.outline)
+
+                // v5.3 Direct Kaggle -> YouTube & Meta FB/IG Reels Auto-Uploader Controls
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Direct Kaggle → YouTube Auto-Upload", style = MaterialTheme.typography.bodyMedium)
+                        Text(
+                            "Kaggle worker uploads final MP4 + thumb.jpg directly via YouTube API v3",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Switch(
+                        checked = appSettings.directKaggleYoutubeUpload,
+                        onCheckedChange = { viewModel.setDirectKaggleYoutubeUpload(it) }
+                    )
+                }
+
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("YT Privacy:", style = MaterialTheme.typography.labelMedium)
+                    listOf("private", "unlisted", "public").forEach { priv ->
+                        FilterChip(
+                            selected = appSettings.youtubeDefaultPrivacy.equals(priv, ignoreCase = true),
+                            onClick = { viewModel.setYoutubeDefaultPrivacy(priv) },
+                            label = { Text(priv.replaceFirstChar { it.uppercase() }) }
+                        )
+                    }
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Direct Kaggle → Meta FB/IG Reels", style = MaterialTheme.typography.bodyMedium)
+                        Text(
+                            "Optional headless Facebook Page / IG Business Reels publish after render",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Switch(
+                        checked = appSettings.directKaggleMetaReelsUpload,
+                        onCheckedChange = { viewModel.setDirectKaggleMetaReelsUpload(it) }
+                    )
                 }
 
                 HorizontalDivider(color = colorScheme.outline)
@@ -1985,6 +2200,7 @@ fun VideoDirectorScreen(
             initialNiche = editingNiche,
             characters = characterProfiles,
             hashtagPacks = hashtagPacks,
+            youtubeProfiles = youTubeProfiles,
             isAutoFilling = isAutoFillingNiche,
             onAutoFillBlueprint = { name, onResult -> viewModel.aiAutoFillNicheBlueprint(name, onResult) },
             onCompressMemoryNow = { id -> viewModel.compressNicheMemoryNow(id) },
@@ -1997,6 +2213,62 @@ fun VideoDirectorScreen(
                 showNicheEditorDialog = false
             },
             onDismiss = { showNicheEditorDialog = false }
+        )
+    }
+
+    thumbnailStudioTarget?.let { (videoPath, defaultTitle) ->
+        ThumbnailStudioSheet(
+            videoFilePath = videoPath,
+            defaultTitle = defaultTitle,
+            defaultAspectRatio = aspectRatio,
+            adobeExpressStatus = adobeExpressStatus,
+            adobeFireflyStatus = adobeFireflyStatus,
+            isLaunchingAdobe = isLaunchingAdobeBridge,
+            onRequestAiHook = { contextTitle, onHookReady ->
+                viewModel.generateViralThumbnailHook(contextTitle, onHookReady)
+            },
+            onThumbnailExported = { exportedPath ->
+                viewModel.setActiveThumbnailPath(exportedPath)
+            },
+            onLaunchAdobeFirefly = { chosenAspect ->
+                viewModel.launchAdobeFireflyForVideo(
+                    title = defaultTitle,
+                    aspectRatio = chosenAspect
+                )
+            },
+            onLaunchAdobeExpress = { frameBmp, tsMs, hookText ->
+                viewModel.launchAdobeExpressForVideo(
+                    videoFilePath = videoPath,
+                    title = defaultTitle,
+                    hookText = hookText,
+                    timestampMs = tsMs,
+                    bitmapOverride = frameBmp
+                )
+            },
+            onBindAdobeApp = { target, pkg -> viewModel.bindAdobeAppPackage(target, pkg) },
+            onResetAdobeApp = { target -> viewModel.resetAdobeAppBinding(target) },
+            onDismiss = { thumbnailStudioTarget = null }
+        )
+    }
+
+    adobePickerTarget?.let { target ->
+        val currentPkg = if (target == AdobeTargetApp.ADOBE_EXPRESS) {
+            adobeExpressStatus.configuredPackage
+        } else {
+            adobeFireflyStatus.configuredPackage
+        }
+        AdobeAppPickerDialog(
+            targetApp = target,
+            currentPackage = currentPkg,
+            onSelectPackage = { pkg ->
+                viewModel.bindAdobeAppPackage(target, pkg)
+                adobePickerTarget = null
+            },
+            onResetDefault = {
+                viewModel.resetAdobeAppBinding(target)
+                adobePickerTarget = null
+            },
+            onDismiss = { adobePickerTarget = null }
         )
     }
 }

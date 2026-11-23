@@ -21,6 +21,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CleaningServices
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.CloudUpload
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.ExpandLess
@@ -65,8 +66,14 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.media3.common.MediaItem
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
+import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.Brush
 import com.omniai.studio.data.remote.SocialMetadata
+import com.omniai.studio.media.AdobeAppPickerDialog
+import com.omniai.studio.media.AdobeTargetApp
+import com.omniai.studio.media.ProAdobeWorkflowCard
 import com.omniai.studio.media.StorageGalleryHelper
+import com.omniai.studio.media.ThumbnailStudioSheet
 import com.omniai.studio.ui.theme.AmoledBlack
 import com.omniai.studio.ui.theme.CrimsonDanger
 import com.omniai.studio.ui.theme.EmeraldAccent
@@ -91,8 +98,17 @@ fun DownloadsGalleryScreen(
     val colorScheme = MaterialTheme.colorScheme
     val downloads by viewModel.downloads.collectAsState()
     val storage by viewModel.storageUsage.collectAsState()
+    val isUploadingToYouTube by viewModel.isUploadingToYouTube.collectAsState()
+    val youTubeUploadProgress by viewModel.youTubeUploadProgress.collectAsState()
+    val youTubeUploadStatus by viewModel.youTubeUploadStatus.collectAsState()
+    val appSettings by viewModel.appSettings.collectAsState()
+    val adobeExpressStatus by viewModel.adobeExpressStatus.collectAsState()
+    val adobeFireflyStatus by viewModel.adobeFireflyStatus.collectAsState()
+    val isLaunchingAdobeBridge by viewModel.isLaunchingAdobeBridge.collectAsState()
 
     var playingFilePath by remember { mutableStateOf<String?>(null) }
+    var thumbnailStudioTarget by remember { mutableStateOf<Pair<String, String>?>(null) }
+    var adobePickerTarget by remember { mutableStateOf<AdobeTargetApp?>(null) }
     var expandedPublishingKitIds by remember { mutableStateOf<Set<Long>>(emptySet()) }
 
     LaunchedEffect(Unit) {
@@ -158,6 +174,66 @@ fun DownloadsGalleryScreen(
             }
         }
 
+        // v5.4 Pro Adobe Workflow (Native Installed Apps — Zero Browser / Zero Custom Tabs)
+        item {
+            val latestCompleted = downloads.firstOrNull { it.status == "COMPLETED" }
+            val latestParsed = latestCompleted?.let { viewModel.parseSocialMetadata(it.socialMetadataJson) }
+            val latestTitle = latestParsed?.viralTitle?.ifBlank {
+                latestCompleted.fileName.substringBeforeLast('.').replace('_', ' ')
+            } ?: latestCompleted?.fileName?.substringBeforeLast('.')?.replace('_', ' ') ?: "OmniAI Video"
+
+            ProAdobeWorkflowCard(
+                expressStatus = adobeExpressStatus,
+                fireflyStatus = adobeFireflyStatus,
+                isBusy = isLaunchingAdobeBridge,
+                onGenerateInFirefly = {
+                    viewModel.launchAdobeFireflyForVideo(title = latestTitle, aspectRatio = "16:9")
+                },
+                onEditFrameInExpress = {
+                    viewModel.launchAdobeExpressForVideo(
+                        videoFilePath = latestCompleted?.filePath,
+                        title = latestTitle,
+                        hookText = latestTitle.split(" ").take(3).joinToString(" ")
+                    )
+                },
+                onChangeBoundApp = { target -> adobePickerTarget = target }
+            )
+        }
+
+        if (isUploadingToYouTube || youTubeUploadStatus.isNotBlank()) {
+            item {
+                OmniSurfaceCard(borderColor = EmeraldAccent.copy(alpha = 0.6f)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = if (isUploadingToYouTube) "YouTube Resumable Upload ($youTubeUploadProgress%)" else "YouTube Uploader",
+                            style = MaterialTheme.typography.titleSmall,
+                            color = EmeraldAccent
+                        )
+                        if (appSettings.activeThumbnailPath.isNotBlank()) {
+                            OmniAccentBadge(text = "Thumb Bound", accent = EmeraldAccent)
+                        }
+                    }
+                    if (youTubeUploadStatus.isNotBlank()) {
+                        Text(
+                            text = youTubeUploadStatus,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = colorScheme.onSurfaceVariant
+                        )
+                    }
+                    if (isUploadingToYouTube) {
+                        LinearProgressIndicator(
+                            progress = { (youTubeUploadProgress / 100f).coerceIn(0f, 1f) },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                }
+            }
+        }
+
         if (downloads.isEmpty()) {
             item {
                 OmniEmptyState(
@@ -197,6 +273,75 @@ fun DownloadsGalleryScreen(
                         OmniOverflowMenuButton(
                             actions = buildList {
                                 if (item.status == "COMPLETED") {
+                                    add(
+                                        OmniOverflowAction(
+                                            label = "Viral Thumbnail Studio",
+                                            icon = Icons.Filled.Image,
+                                            onClick = {
+                                                val title = item.fileName.substringBeforeLast('.').replace('_', ' ')
+                                                thumbnailStudioTarget = item.filePath to title
+                                            }
+                                        )
+                                    )
+                                    add(
+                                        OmniOverflowAction(
+                                            label = "Generate in Adobe Firefly",
+                                            icon = Icons.Filled.AutoAwesome,
+                                            enabled = !isLaunchingAdobeBridge,
+                                            onClick = {
+                                                val parsed = viewModel.parseSocialMetadata(item.socialMetadataJson)
+                                                val title = parsed?.viralTitle?.ifBlank {
+                                                    item.fileName.substringBeforeLast('.').replace('_', ' ')
+                                                } ?: item.fileName.substringBeforeLast('.').replace('_', ' ')
+                                                viewModel.launchAdobeFireflyForVideo(title = title, aspectRatio = "16:9")
+                                            }
+                                        )
+                                    )
+                                    add(
+                                        OmniOverflowAction(
+                                            label = "Edit Frame in Adobe Express",
+                                            icon = Icons.Filled.Brush,
+                                            enabled = !isLaunchingAdobeBridge,
+                                            onClick = {
+                                                val parsed = viewModel.parseSocialMetadata(item.socialMetadataJson)
+                                                val title = parsed?.viralTitle?.ifBlank {
+                                                    item.fileName.substringBeforeLast('.').replace('_', ' ')
+                                                } ?: item.fileName.substringBeforeLast('.').replace('_', ' ')
+                                                viewModel.launchAdobeExpressForVideo(
+                                                    videoFilePath = item.filePath,
+                                                    title = title
+                                                )
+                                            }
+                                        )
+                                    )
+                                    add(
+                                        OmniOverflowAction(
+                                            label = "Upload to YouTube",
+                                            icon = Icons.Filled.CloudUpload,
+                                            enabled = !isUploadingToYouTube,
+                                            onClick = {
+                                                val parsed = viewModel.parseSocialMetadata(item.socialMetadataJson)
+                                                val title = parsed?.viralTitle?.ifBlank {
+                                                    item.fileName.substringBeforeLast('.').replace('_', ' ')
+                                                } ?: item.fileName.substringBeforeLast('.').replace('_', ' ')
+                                                val desc = buildString {
+                                                    append(parsed?.caption ?: "Rendered offline with OmniAI-Studio.")
+                                                    if (!parsed?.hashtags.isNullOrEmpty()) {
+                                                        append("\n\n")
+                                                        append(parsed!!.hashtags.joinToString(" "))
+                                                    }
+                                                }
+                                                viewModel.uploadVideoToYouTube(
+                                                    videoFilePath = item.filePath,
+                                                    title = title,
+                                                    description = desc,
+                                                    tags = parsed?.hashtags?.map { it.removePrefix("#") }.orEmpty(),
+                                                    firstComment = parsed?.pinnedComment.orEmpty(),
+                                                    privacyStatus = appSettings.youtubeDefaultPrivacy
+                                                )
+                                            }
+                                        )
+                                    )
                                     add(
                                         OmniOverflowAction(
                                             label = "Save to Public Gallery",
@@ -373,6 +518,40 @@ fun DownloadsGalleryScreen(
                                             Text("Desc + Tags")
                                         }
                                     }
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        OutlinedButton(
+                                            onClick = {
+                                                thumbnailStudioTarget = item.filePath to seoMeta.viralTitle
+                                            },
+                                            modifier = Modifier.weight(1f)
+                                        ) {
+                                            Icon(Icons.Filled.Image, contentDescription = null)
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                            Text("Thumbnail Studio")
+                                        }
+                                        Button(
+                                            enabled = !isUploadingToYouTube,
+                                            onClick = {
+                                                val fullDesc = "${seoMeta.caption}\n\n${seoMeta.hashtags.joinToString(" ")}"
+                                                viewModel.uploadVideoToYouTube(
+                                                    videoFilePath = item.filePath,
+                                                    title = seoMeta.viralTitle,
+                                                    description = fullDesc,
+                                                    tags = seoMeta.hashtags.map { it.removePrefix("#") },
+                                                    firstComment = seoMeta.pinnedComment,
+                                                    privacyStatus = appSettings.youtubeDefaultPrivacy
+                                                )
+                                            },
+                                            modifier = Modifier.weight(1f)
+                                        ) {
+                                            Icon(Icons.Filled.CloudUpload, contentDescription = null)
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                            Text("YouTube")
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -386,6 +565,58 @@ fun DownloadsGalleryScreen(
         FullScreenExoPlayerDialog(
             videoPath = path,
             onDismiss = { playingFilePath = null }
+        )
+    }
+
+    thumbnailStudioTarget?.let { (videoPath, defaultTitle) ->
+        ThumbnailStudioSheet(
+            videoFilePath = videoPath,
+            defaultTitle = defaultTitle,
+            adobeExpressStatus = adobeExpressStatus,
+            adobeFireflyStatus = adobeFireflyStatus,
+            isLaunchingAdobe = isLaunchingAdobeBridge,
+            onRequestAiHook = { contextTitle, onHookReady ->
+                viewModel.generateViralThumbnailHook(contextTitle, onHookReady)
+            },
+            onThumbnailExported = { exportedPath ->
+                viewModel.setActiveThumbnailPath(exportedPath)
+            },
+            onLaunchAdobeFirefly = { chosenAspect ->
+                viewModel.launchAdobeFireflyForVideo(title = defaultTitle, aspectRatio = chosenAspect)
+            },
+            onLaunchAdobeExpress = { frameBmp, tsMs, hookText ->
+                viewModel.launchAdobeExpressForVideo(
+                    videoFilePath = videoPath,
+                    title = defaultTitle,
+                    hookText = hookText,
+                    timestampMs = tsMs,
+                    bitmapOverride = frameBmp
+                )
+            },
+            onBindAdobeApp = { target, pkg -> viewModel.bindAdobeAppPackage(target, pkg) },
+            onResetAdobeApp = { target -> viewModel.resetAdobeAppBinding(target) },
+            onDismiss = { thumbnailStudioTarget = null }
+        )
+    }
+
+    adobePickerTarget?.let { target ->
+        val currentPkg = if (target == AdobeTargetApp.ADOBE_EXPRESS) {
+            adobeExpressStatus.configuredPackage
+        } else {
+            adobeFireflyStatus.configuredPackage
+        }
+        AdobeAppPickerDialog(
+            targetApp = target,
+            currentPackage = currentPkg,
+            onSelectPackage = { pkg ->
+                viewModel.bindAdobeAppPackage(target, pkg)
+                adobePickerTarget = null
+            },
+            onResetDefault = {
+                viewModel.resetAdobeAppBinding(target)
+                adobePickerTarget = null
+            },
+            onDismiss = { adobePickerTarget = null }
         )
     }
 }

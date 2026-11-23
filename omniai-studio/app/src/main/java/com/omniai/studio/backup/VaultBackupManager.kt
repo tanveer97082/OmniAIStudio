@@ -231,6 +231,7 @@ data class BackupNicheItem(
     val defaultAspectRatio: String = "9:16",
     val linkedCharacterId: Long? = null,
     val linkedHashtagPackId: Long? = null,
+    val linkedYoutubeProfileId: String = "",
     val rollingChatSummary: String = "",
     val lastSummarizedMessageCount: Int = 0,
     val episodeCount: Int = 0,
@@ -287,7 +288,12 @@ data class BackupAppSettingsSnapshot(
     val defaultGithubOwner: String = "",
     val defaultGithubBranch: String = "main",
     val autoWatchActionsAfterPush: Boolean = true,
-    val aiAutoCommitMessageEnabled: Boolean = true
+    val aiAutoCommitMessageEnabled: Boolean = true,
+    val directKaggleTelegramUpload: Boolean = false,
+    val skipPhoneDownloadWhenSentToTelegram: Boolean = false,
+    val directKaggleYoutubeUpload: Boolean = false,
+    val youtubeDefaultPrivacy: String = "private",
+    val directKaggleMetaReelsUpload: Boolean = false
 )
 
 @Serializable
@@ -344,7 +350,7 @@ data class BackupProjectItem(
 
 @Serializable
 data class SelectiveBackupPayload(
-    val schemaVersion: Int = 45,
+    val schemaVersion: Int = 55,
     val exportedAtEpochMs: Long,
     val selection: BackupSelectionOptions,
     val vault: VaultSnapshot? = null,
@@ -698,6 +704,7 @@ class VaultBackupManager(
                     defaultAspectRatio = n.defaultAspectRatio,
                     linkedCharacterId = n.linkedCharacterId,
                     linkedHashtagPackId = n.linkedHashtagPackId,
+                    linkedYoutubeProfileId = n.linkedYoutubeProfileId,
                     rollingChatSummary = n.rollingChatSummary,
                     lastSummarizedMessageCount = n.lastSummarizedMessageCount,
                     episodeCount = n.episodeCount,
@@ -848,7 +855,12 @@ class VaultBackupManager(
                 defaultGithubOwner = s.defaultGithubOwner,
                 defaultGithubBranch = s.defaultGithubBranch,
                 autoWatchActionsAfterPush = s.autoWatchActionsAfterPush,
-                aiAutoCommitMessageEnabled = s.aiAutoCommitMessageEnabled
+                aiAutoCommitMessageEnabled = s.aiAutoCommitMessageEnabled,
+                directKaggleTelegramUpload = s.directKaggleTelegramUpload,
+                skipPhoneDownloadWhenSentToTelegram = s.skipPhoneDownloadWhenSentToTelegram,
+                directKaggleYoutubeUpload = s.directKaggleYoutubeUpload,
+                youtubeDefaultPrivacy = s.youtubeDefaultPrivacy,
+                directKaggleMetaReelsUpload = s.directKaggleMetaReelsUpload
             )
         } else {
             null
@@ -907,6 +919,7 @@ class VaultBackupManager(
                     defaultAspectRatio = n.defaultAspectRatio.ifBlank { "9:16" },
                     linkedCharacterId = n.linkedCharacterId,
                     linkedHashtagPackId = n.linkedHashtagPackId,
+                    linkedYoutubeProfileId = n.linkedYoutubeProfileId,
                     rollingChatSummary = n.rollingChatSummary,
                     lastSummarizedMessageCount = n.lastSummarizedMessageCount,
                     episodeCount = n.episodeCount,
@@ -1284,7 +1297,12 @@ class VaultBackupManager(
                     defaultGithubOwner = s.defaultGithubOwner,
                     defaultGithubBranch = s.defaultGithubBranch.ifBlank { "main" },
                     autoWatchActionsAfterPush = s.autoWatchActionsAfterPush,
-                    aiAutoCommitMessageEnabled = s.aiAutoCommitMessageEnabled
+                    aiAutoCommitMessageEnabled = s.aiAutoCommitMessageEnabled,
+                    directKaggleTelegramUpload = s.directKaggleTelegramUpload,
+                    skipPhoneDownloadWhenSentToTelegram = s.skipPhoneDownloadWhenSentToTelegram,
+                    directKaggleYoutubeUpload = s.directKaggleYoutubeUpload,
+                    youtubeDefaultPrivacy = s.youtubeDefaultPrivacy.ifBlank { "private" },
+                    directKaggleMetaReelsUpload = s.directKaggleMetaReelsUpload
                 )
             }
             restoredSettings = true

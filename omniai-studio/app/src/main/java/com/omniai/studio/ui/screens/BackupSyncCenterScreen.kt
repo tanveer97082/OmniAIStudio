@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.AutoFixHigh
 import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.CloudUpload
 import androidx.compose.material.icons.filled.ContentCopy
@@ -51,6 +52,9 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import com.omniai.studio.backup.BackupSelectionOptions
+import com.omniai.studio.ui.guides.PlatformGuideBottomSheet
+import com.omniai.studio.ui.guides.PlatformGuideId
+import com.omniai.studio.ui.guides.PlatformGuideTriggerButton
 import com.omniai.studio.ui.theme.AmoledBlack
 import com.omniai.studio.ui.theme.AmoledBorder
 import com.omniai.studio.ui.theme.AmoledSurface
@@ -71,12 +75,14 @@ import java.util.Locale
 @Composable
 fun BackupSyncCenterScreen(
     viewModel: OmniAiViewModel,
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    onRunGuideCommandInTerminal: (String) -> Unit = {}
 ) {
     val clipboard = LocalClipboardManager.current
     val settings by viewModel.appSettings.collectAsState()
     val vaultSnapshot by viewModel.vaultSnapshot.collectAsState()
     val isBackupBusy by viewModel.isBackupCenterBusy.collectAsState()
+    val isDetectingTgChatId by viewModel.isDetectingTelegramChatId.collectAsState()
     val backupStatus by viewModel.backupCenterStatus.collectAsState()
     val localSnapshots by viewModel.localBackupSnapshots.collectAsState()
     val primaryColor = MaterialTheme.colorScheme.primary
@@ -86,6 +92,9 @@ fun BackupSyncCenterScreen(
     var migrationPasteInput by remember { mutableStateOf("") }
     var tgBotToken by remember(vaultSnapshot) { mutableStateOf(vaultSnapshot.telegramBotToken) }
     var tgChatId by remember(vaultSnapshot) { mutableStateOf(vaultSnapshot.telegramChatId) }
+    var tgApiId by remember(vaultSnapshot) { mutableStateOf(vaultSnapshot.telegramApiId) }
+    var tgApiHash by remember(vaultSnapshot) { mutableStateOf(vaultSnapshot.telegramApiHash) }
+    var activeGuideId by remember { mutableStateOf<PlatformGuideId?>(null) }
 
     LaunchedEffect(Unit) {
         viewModel.refreshLocalBackupSnapshots()
@@ -267,7 +276,16 @@ fun BackupSyncCenterScreen(
                 border = BorderStroke(1.dp, AmoledBorder)
             ) {
                 Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("Layer 2: Private GitHub Cloud Sync", style = MaterialTheme.typography.titleMedium, color = primaryColor)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("Layer 2: Private GitHub Cloud Sync", style = MaterialTheme.typography.titleMedium, color = primaryColor)
+                        PlatformGuideTriggerButton(
+                            onClick = { activeGuideId = PlatformGuideId.GITHUB_CICD }
+                        )
+                    }
                     Text(
                         "Repo: ${vaultSnapshot.githubRepo.ifBlank { "Configure owner/repo in Vault" }} -> backups/omniai_vault.enc",
                         style = MaterialTheme.typography.labelMedium,
@@ -333,7 +351,16 @@ fun BackupSyncCenterScreen(
                 border = BorderStroke(1.dp, AmoledBorder)
             ) {
                 Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("Layer 3: Telegram Bot Cloud Archive", style = MaterialTheme.typography.titleMedium, color = primaryColor)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("Layer 3: Telegram Bot & 2 GB Kaggle Upload", style = MaterialTheme.typography.titleMedium, color = primaryColor)
+                        PlatformGuideTriggerButton(
+                            onClick = { activeGuideId = PlatformGuideId.TELEGRAM_2GB }
+                        )
+                    }
                     OutlinedTextField(
                         value = tgBotToken,
                         onValueChange = { tgBotToken = it },
@@ -342,23 +369,56 @@ fun BackupSyncCenterScreen(
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth()
                     )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        OutlinedTextField(
+                            value = tgChatId,
+                            onValueChange = { tgChatId = it },
+                            label = { Text("TG_CHAT_ID (Private Chat or -100... Channel)") },
+                            singleLine = true,
+                            modifier = Modifier.weight(1f)
+                        )
+                        OutlinedButton(
+                            onClick = {
+                                viewModel.autoDetectTelegramChatId(tgBotToken) { detectedId ->
+                                    tgChatId = detectedId
+                                }
+                            },
+                            enabled = !isDetectingTgChatId && tgBotToken.isNotBlank()
+                        ) {
+                            Icon(Icons.Filled.AutoFixHigh, contentDescription = null)
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(if (isDetectingTgChatId) "Detecting..." else "Auto-Detect")
+                        }
+                    }
                     OutlinedTextField(
-                        value = tgChatId,
-                        onValueChange = { tgChatId = it },
-                        label = { Text("TG_CHAT_ID (Private Chat or Channel ID)") },
+                        value = tgApiId,
+                        onValueChange = { tgApiId = it },
+                        label = { Text("TG_API_ID (my.telegram.org · 2 GB MTProto)") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = tgApiHash,
+                        onValueChange = { tgApiHash = it },
+                        label = { Text("TG_API_HASH (my.telegram.org · 2 GB MTProto)") },
+                        visualTransformation = PasswordVisualTransformation(),
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth()
                     )
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
                         OutlinedButton(
-                            onClick = { viewModel.saveTelegramCredentials(tgBotToken, tgChatId) },
+                            onClick = { viewModel.saveTelegramCredentials(tgBotToken, tgChatId, tgApiId, tgApiHash) },
                             modifier = Modifier.weight(1f)
                         ) {
                             Text("Save Bot Keys")
                         }
                         Button(
                             onClick = {
-                                viewModel.saveTelegramCredentials(tgBotToken, tgChatId)
+                                viewModel.saveTelegramCredentials(tgBotToken, tgChatId, tgApiId, tgApiHash)
                                 viewModel.testTelegramBot()
                             },
                             enabled = !isBackupBusy && tgBotToken.isNotBlank() && tgChatId.isNotBlank(),
@@ -366,6 +426,18 @@ fun BackupSyncCenterScreen(
                         ) {
                             Text("Test Bot")
                         }
+                    }
+                    OutlinedButton(
+                        onClick = {
+                            val setupText = viewModel.buildKaggleSecretsSetupText(tgBotToken, tgChatId, tgApiId, tgApiHash)
+                            clipboard.setText(AnnotatedString(setupText))
+                            viewModel.postToast("Copied Kaggle Secrets Setup (TG_BOT_TOKEN, TG_CHAT_ID, TG_API_ID, TG_API_HASH).")
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Filled.ContentCopy, contentDescription = null)
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Copy Kaggle Secrets Setup (2 GB MTProto)")
                     }
 
                     Row(
@@ -456,6 +528,18 @@ fun BackupSyncCenterScreen(
                 }
             }
         }
+    }
+
+    activeGuideId?.let { guideId ->
+        PlatformGuideBottomSheet(
+            guideId = guideId,
+            onDismiss = { activeGuideId = null },
+            onToast = { viewModel.postToast(it) },
+            onRunInTerminal = { command ->
+                activeGuideId = null
+                onRunGuideCommandInTerminal(command)
+            }
+        )
     }
 }
 

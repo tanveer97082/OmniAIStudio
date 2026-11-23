@@ -1,6 +1,7 @@
 package com.omniai.studio.viewmodel
 
 import android.app.Application
+import android.content.Context
 import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -9,6 +10,12 @@ import com.omniai.studio.OmniAiApplication
 import com.omniai.studio.backup.BackupSelectionOptions
 import com.omniai.studio.backup.BackupSyncWorker
 import com.omniai.studio.backup.LocalBackupSnapshotInfo
+import com.omniai.studio.cloud.CloudSessionState
+import com.omniai.studio.cloud.CloudSyncStatus
+import com.omniai.studio.cloud.CloudSyncWorker
+import com.omniai.studio.cloud.CloudUserProfile
+import com.omniai.studio.cloud.CloudUserRole
+import com.omniai.studio.cloud.RoleCapabilities
 import com.omniai.studio.data.local.ApiMetricEntity
 import com.omniai.studio.data.local.AppSettings
 import com.omniai.studio.data.local.AutoTypeSpeedMode
@@ -69,6 +76,16 @@ import com.omniai.studio.data.remote.StoryboardPayload
 import com.omniai.studio.data.remote.StoryboardScene
 import com.omniai.studio.data.remote.VaultSnapshot
 import com.omniai.studio.data.remote.WebArticleScraper
+import com.omniai.studio.data.remote.YouTubeChannelProfile
+import com.omniai.studio.data.remote.YouTubeChannelStats
+import com.omniai.studio.data.remote.YouTubeCommentItem
+import com.omniai.studio.data.remote.YouTubeUploadMetadata
+import com.omniai.studio.data.remote.YouTubeUploadRequest
+import com.omniai.studio.data.remote.YouTubeVideoPerformance
+import android.graphics.Bitmap
+import com.omniai.studio.media.AdobeAppBridge
+import com.omniai.studio.media.AdobeResolutionResult
+import com.omniai.studio.media.AdobeTargetApp
 import com.omniai.studio.media.AttachedDocument
 import com.omniai.studio.media.MergeClipSpec
 import com.omniai.studio.media.OfflineDocumentReader
@@ -100,12 +117,22 @@ import com.omniai.studio.terminal.TerminalLine
 import com.omniai.studio.terminal.TerminalLineType
 import com.omniai.studio.projects.AiMultiFileSplitter
 import com.omniai.studio.projects.ParsedProjectFile
+import com.omniai.studio.git.BuildDiagnosisResult
+import com.omniai.studio.git.SecretLeakScanner
+import com.omniai.studio.git.SecretScanReport
+import com.omniai.studio.lan.LanWebServerState
+import com.omniai.studio.lan.LocalLanWebServer
+import com.omniai.studio.security.DeviceHealthSnapshot
+import com.omniai.studio.ui.screens.DiffPreviewFile
 import com.omniai.studio.ui.theme.ThemeAccent
 import com.omniai.studio.widget.OmniWidgetProvider
 import com.omniai.studio.worker.GitAutoPushWorker
 import com.omniai.studio.worker.NewsDigestWorker
+import com.omniai.studio.worker.OutboxFlushWorker
 import com.omniai.studio.worker.PublishReminderWorker
 import com.omniai.studio.worker.TunnelWatchdogWorker
+import com.omniai.studio.youtube.ComplianceScanReport
+import com.omniai.studio.youtube.PolicyComplianceScanner
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
@@ -197,8 +224,112 @@ class OmniAiViewModel(application: Application) : AndroidViewModel(application) 
     private val gitHubGitEngine = app.gitHubGitEngine
     private val ttsHelper = app.ttsHelper
     private val duressPinManager = app.duressPinManager
+    private val youTubeApiClient = app.youTubeApiClient
+    private val youTubeAnalyticsRepository = app.youTubeAnalyticsRepository
+    private val rolePermissionGuard = app.rolePermissionGuard
+    private val supabaseAuthManager = app.supabaseAuthManager
+    private val cloudSyncRepository = app.cloudSyncRepository
+    private val apiKeyPoolManager = app.apiKeyPoolManager
+    private val resumableDownloadManager = app.resumableDownloadManager
+    private val deviceHealthGuard = app.deviceHealthGuard
+    private val aiBuildDoctor = app.aiBuildDoctor
+    private val localLanWebServer = app.localLanWebServer
 
     private val json = Json { ignoreUnknownKeys = true; prettyPrint = true; encodeDefaults = true }
+
+    // v5.0 Resilience Engine StateFlows (LAN Web Studio, Device Health, Secret Scanner, Build Doctor, Compliance)
+    val lanWebServerState: StateFlow<LanWebServerState> = localLanWebServer.state
+
+    private val _deviceHealth = MutableStateFlow(deviceHealthGuard.inspect())
+    val deviceHealth: StateFlow<DeviceHealthSnapshot> = _deviceHealth.asStateFlow()
+
+    private val _lastSecretScanReport = MutableStateFlow(SecretScanReport())
+    val lastSecretScanReport: StateFlow<SecretScanReport> = _lastSecretScanReport.asStateFlow()
+
+    private val _lastBuildDiagnosis = MutableStateFlow<BuildDiagnosisResult?>(null)
+    val lastBuildDiagnosis: StateFlow<BuildDiagnosisResult?> = _lastBuildDiagnosis.asStateFlow()
+
+    private val _isRunningBuildDoctor = MutableStateFlow(false)
+    val isRunningBuildDoctor: StateFlow<Boolean> = _isRunningBuildDoctor.asStateFlow()
+
+    private val _lastComplianceReport = MutableStateFlow<ComplianceScanReport?>(null)
+    val lastComplianceReport: StateFlow<ComplianceScanReport?> = _lastComplianceReport.asStateFlow()
+
+    // v5.5 Supabase PostgreSQL Compressed Cloud DB, Google OAuth PKCE & Server-Enforced RBAC State
+    val cloudRole: StateFlow<CloudUserRole> = rolePermissionGuard.activeRole
+    val roleCapabilities: StateFlow<RoleCapabilities> = rolePermissionGuard.capabilities
+    val cloudSessionState: StateFlow<CloudSessionState> = supabaseAuthManager.sessionState
+    val cloudSyncStatus: StateFlow<CloudSyncStatus> = cloudSyncRepository.syncStatus
+
+    private val _cloudTeamProfiles = MutableStateFlow<List<CloudUserProfile>>(emptyList())
+    val cloudTeamProfiles: StateFlow<List<CloudUserProfile>> = _cloudTeamProfiles.asStateFlow()
+
+    private val _isLoadingCloudTeam = MutableStateFlow(false)
+    val isLoadingCloudTeam: StateFlow<Boolean> = _isLoadingCloudTeam.asStateFlow()
+
+    private val _isRefreshingCloudStatus = MutableStateFlow(false)
+    val isRefreshingCloudStatus: StateFlow<Boolean> = _isRefreshingCloudStatus.asStateFlow()
+
+    private val _cloudSyncIntervalMinutes = MutableStateFlow(vault.cloudSyncIntervalMinutes)
+    val cloudSyncIntervalMinutes: StateFlow<Int> = _cloudSyncIntervalMinutes.asStateFlow()
+
+    private val _cloudSyncWifiOnly = MutableStateFlow(vault.cloudSyncWifiOnly)
+    val cloudSyncWifiOnly: StateFlow<Boolean> = _cloudSyncWifiOnly.asStateFlow()
+
+    // v5.3 YouTube Data API v3, Multi-Channel, Quota, Analytics & Comment Assistant State
+    private val _youTubeProfiles = MutableStateFlow(vault.getYouTubeProfiles())
+    val youTubeProfiles: StateFlow<List<YouTubeChannelProfile>> = _youTubeProfiles.asStateFlow()
+
+    private val _activeYouTubeProfileId = MutableStateFlow(vault.activeYouTubeProfileId)
+    val activeYouTubeProfileId: StateFlow<String> = _activeYouTubeProfileId.asStateFlow()
+
+    val youTubeChannelStats: StateFlow<YouTubeChannelStats?> = youTubeAnalyticsRepository.channelStats
+    val youTubeRecentVideos: StateFlow<List<YouTubeVideoPerformance>> = youTubeAnalyticsRepository.recentVideos
+    val isRefreshingYouTubeStats: StateFlow<Boolean> = youTubeAnalyticsRepository.isRefreshing
+    val youTubeTodayQuotaUnits: StateFlow<Int> = youTubeAnalyticsRepository
+        .observeTodayQuotaUnits()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
+
+    private val _isUploadingToYouTube = MutableStateFlow(false)
+    val isUploadingToYouTube: StateFlow<Boolean> = _isUploadingToYouTube.asStateFlow()
+
+    private val _youTubeUploadProgress = MutableStateFlow(0)
+    val youTubeUploadProgress: StateFlow<Int> = _youTubeUploadProgress.asStateFlow()
+
+    private val _youTubeUploadStatus = MutableStateFlow("")
+    val youTubeUploadStatus: StateFlow<String> = _youTubeUploadStatus.asStateFlow()
+
+    private val _youTubeComments = MutableStateFlow<List<YouTubeCommentItem>>(emptyList())
+    val youTubeComments: StateFlow<List<YouTubeCommentItem>> = _youTubeComments.asStateFlow()
+
+    private val _isLoadingYouTubeComments = MutableStateFlow(false)
+    val isLoadingYouTubeComments: StateFlow<Boolean> = _isLoadingYouTubeComments.asStateFlow()
+
+    private val _youTubeCommentStatus = MutableStateFlow("")
+    val youTubeCommentStatus: StateFlow<String> = _youTubeCommentStatus.asStateFlow()
+
+    // v5.4 Native Adobe Express & Adobe Firefly Redirection Bridge State (Zero Browser / Zero Custom Tabs)
+    private val _adobeExpressStatus = MutableStateFlow(
+        AdobeAppBridge.resolveInstalledAdobeApp(app, AdobeTargetApp.ADOBE_EXPRESS)
+    )
+    val adobeExpressStatus: StateFlow<AdobeResolutionResult> = _adobeExpressStatus.asStateFlow()
+
+    private val _adobeFireflyStatus = MutableStateFlow(
+        AdobeAppBridge.resolveInstalledAdobeApp(app, AdobeTargetApp.ADOBE_FIREFLY)
+    )
+    val adobeFireflyStatus: StateFlow<AdobeResolutionResult> = _adobeFireflyStatus.asStateFlow()
+
+    private val _isLaunchingAdobeBridge = MutableStateFlow(false)
+    val isLaunchingAdobeBridge: StateFlow<Boolean> = _isLaunchingAdobeBridge.asStateFlow()
+
+    private val _awaitingAdobeThumbnailForScriptId = MutableStateFlow<Long?>(null)
+    val awaitingAdobeThumbnailForScriptId: StateFlow<Long?> = _awaitingAdobeThumbnailForScriptId.asStateFlow()
+
+    private val _awaitingAdobeSourceApp = MutableStateFlow("")
+    val awaitingAdobeSourceApp: StateFlow<String> = _awaitingAdobeSourceApp.asStateFlow()
+
+    private val _showAdobeReturnBanner = MutableStateFlow(false)
+    val showAdobeReturnBanner: StateFlow<Boolean> = _showAdobeReturnBanner.asStateFlow()
 
     // Global App Settings, v3.0 UI Customization Config, Offline TTS, Crash Diagnostics & Share-to-AI State
     val appSettings: StateFlow<AppSettings> = settingsRepo.settings
@@ -574,6 +705,9 @@ class OmniAiViewModel(application: Application) : AndroidViewModel(application) 
 
     private val _isBackupCenterBusy = MutableStateFlow(false)
     val isBackupCenterBusy: StateFlow<Boolean> = _isBackupCenterBusy.asStateFlow()
+
+    private val _isDetectingTelegramChatId = MutableStateFlow(false)
+    val isDetectingTelegramChatId: StateFlow<Boolean> = _isDetectingTelegramChatId.asStateFlow()
 
     private val _backupCenterStatus = MutableStateFlow("")
     val backupCenterStatus: StateFlow<String> = _backupCenterStatus.asStateFlow()
@@ -1403,6 +1537,10 @@ class OmniAiViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun deleteThread(thread: ChatThreadEntity) {
+        rolePermissionGuard.denyReasonForDelete()?.let {
+            postToast(it)
+            return
+        }
         viewModelScope.launch(Dispatchers.IO) {
             db.chatDao().deleteThread(thread)
             if (_activeThreadId.value == thread.id) {
@@ -1651,6 +1789,10 @@ class OmniAiViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun sendChatMessage(userText: String) {
+        rolePermissionGuard.denyReasonForContentWrite()?.let {
+            postToast(it)
+            return
+        }
         val trimmed = userText.trim()
         if (trimmed.isEmpty() || _isStreamingChat.value) return
 
@@ -2255,7 +2397,12 @@ class OmniAiViewModel(application: Application) : AndroidViewModel(application) 
         aspectRatio: String,
         voice: String,
         burnSubtitles: Boolean,
-        downloadIndividualScenes: Boolean
+        downloadIndividualScenes: Boolean,
+        directTelegramUpload: Boolean = settingsRepo.current.directKaggleTelegramUpload,
+        skipPhoneDownload: Boolean = settingsRepo.current.skipPhoneDownloadWhenSentToTelegram,
+        directYoutubeUpload: Boolean = settingsRepo.current.directKaggleYoutubeUpload,
+        youtubePrivacyStatus: String = settingsRepo.current.youtubeDefaultPrivacy,
+        directFbIgUpload: Boolean = settingsRepo.current.directKaggleMetaReelsUpload
     ) {
         val scenes = _draftScenes.value
         if (scenes.isEmpty()) {
@@ -2289,6 +2436,33 @@ class OmniAiViewModel(application: Application) : AndroidViewModel(application) 
                 ?: vault.kaggleUsername.ifBlank { "Primary" }
             val refImagePath = _selectedRefImagePath.value.trim()
             val loopEnabled = _draftSeamlessLoop.value
+            val effectiveSkipPhone = directTelegramUpload && skipPhoneDownload
+            val builtTelegramCaption = buildString {
+                append(socialMeta.viralTitle.ifBlank { _draftTitle.value.ifBlank { "OmniAI Video" } })
+                if (socialMeta.caption.isNotBlank()) {
+                    append("\n\n")
+                    append(socialMeta.caption.trim())
+                }
+                if (socialMeta.hashtags.isNotEmpty()) {
+                    append("\n\n")
+                    append(socialMeta.hashtags.joinToString(" "))
+                }
+            }.take(980)
+
+            val ytMeta = if (directYoutubeUpload || directFbIgUpload) {
+                YouTubeUploadMetadata(
+                    title = socialMeta.viralTitle.ifBlank { _draftTitle.value.ifBlank { "OmniAI Video" } }.take(100),
+                    description = builtTelegramCaption,
+                    tags = socialMeta.hashtags.map { it.removePrefix("#").trim() }.filter { it.isNotBlank() },
+                    categoryId = "22",
+                    privacyStatus = youtubePrivacyStatus.ifBlank { "private" },
+                    publishAt = "",
+                    firstComment = socialMeta.pinnedComment.trim()
+                )
+            } else {
+                null
+            }
+
             val payload = StoryboardPayload(
                 title = _draftTitle.value.ifBlank { "OmniAI Video" },
                 aspectRatio = aspectRatio,
@@ -2301,10 +2475,24 @@ class OmniAiViewModel(application: Application) : AndroidViewModel(application) 
                 speedFactor = _draftSpeedFactor.value,
                 useRefImage = refImagePath.isNotBlank() && File(refImagePath).exists(),
                 seamlessLoop = loopEnabled,
-                socialMetadata = socialMeta
+                socialMetadata = socialMeta,
+                directTelegramUpload = directTelegramUpload,
+                uploadIndividualScenes = downloadIndividualScenes,
+                telegramCaption = builtTelegramCaption,
+                skipPhoneDownload = effectiveSkipPhone,
+                directYoutubeUpload = directYoutubeUpload,
+                youtubeMetadata = ytMeta,
+                directFbIgUpload = directFbIgUpload
             )
             val payloadJson = json.encodeToString(payload)
             val socialJson = json.encodeToString(socialMeta)
+            val modeTags = buildList {
+                if (directYoutubeUpload) add("Direct YouTube ($youtubePrivacyStatus)")
+                if (directFbIgUpload) add("Meta Reels")
+                if (directTelegramUpload && effectiveSkipPhone) add("Direct TG 2GB (Data Saver)")
+                else if (directTelegramUpload) add("Direct TG 2GB")
+            }
+            val modeSuffix = if (modeTags.isNotEmpty()) " · ${modeTags.joinToString(" + ")}" else ""
             db.renderJobDao().insert(
                 RenderJobEntity(
                     storyboardId = 0L,
@@ -2316,7 +2504,7 @@ class OmniAiViewModel(application: Application) : AndroidViewModel(application) 
                     downloadIndividualScenes = downloadIndividualScenes,
                     status = "QUEUED",
                     progressPercent = 0,
-                    statusMessage = "Queued for Kaggle T4 x2 worker ($activeAccountLabel)",
+                    statusMessage = "Queued for Kaggle T4 x2 worker ($activeAccountLabel$modeSuffix)",
                     socialMetadataJson = socialJson,
                     refImagePath = refImagePath,
                     accountLabel = activeAccountLabel
@@ -2324,8 +2512,43 @@ class OmniAiViewModel(application: Application) : AndroidViewModel(application) 
             )
             RenderQueueForegroundService.enqueueStart(app)
             OmniWidgetProvider.requestRefresh(app)
-            postToast("Queued '${payload.title}' (${_draftSpeedFactor.value}x${if (loopEnabled) " · Loop" else ""}) on $activeAccountLabel.")
+            postToast("Queued '${payload.title}' (${_draftSpeedFactor.value}x${if (loopEnabled) " · Loop" else ""}$modeSuffix) on $activeAccountLabel.")
         }
+    }
+
+    fun setDirectKaggleTelegramUpload(enabled: Boolean) {
+        settingsRepo.update {
+            it.copy(
+                directKaggleTelegramUpload = enabled,
+                skipPhoneDownloadWhenSentToTelegram = if (enabled) it.skipPhoneDownloadWhenSentToTelegram else false
+            )
+        }
+    }
+
+    fun setSkipPhoneDownloadWhenSentToTelegram(enabled: Boolean) {
+        settingsRepo.update { it.copy(skipPhoneDownloadWhenSentToTelegram = enabled) }
+    }
+
+    fun setDirectKaggleYoutubeUpload(enabled: Boolean) {
+        settingsRepo.update { it.copy(directKaggleYoutubeUpload = enabled) }
+    }
+
+    fun setYoutubeDefaultPrivacy(privacy: String) {
+        settingsRepo.update { it.copy(youtubeDefaultPrivacy = privacy) }
+    }
+
+    fun setDirectKaggleMetaReelsUpload(enabled: Boolean) {
+        settingsRepo.update { it.copy(directKaggleMetaReelsUpload = enabled) }
+    }
+
+    fun setActiveThumbnailPath(path: String) {
+        settingsRepo.update { it.copy(activeThumbnailPath = path.trim()) }
+        postToast("Thumbnail bound for next YouTube Direct Upload.")
+    }
+
+    fun downloadKaggleCopyToPhone(job: RenderJobEntity) {
+        RenderQueueForegroundService.enqueueDownloadCopy(app, job.id)
+        postToast("Downloading phone copy for '${job.title}' from Kaggle Output...")
     }
 
     fun retryRenderJob(job: RenderJobEntity) {
@@ -2443,6 +2666,12 @@ class OmniAiViewModel(application: Application) : AndroidViewModel(application) 
             postToast("Select at least 2 MP4 clips to merge.")
             return
         }
+        val healthBlock = deviceHealthGuard.guardReasonForHeavyMediaJob()
+        if (healthBlock != null) {
+            _deviceHealth.value = deviceHealthGuard.inspect()
+            postToast(healthBlock)
+            return
+        }
         viewModelScope.launch {
             _mergeState.value = current.copy(isMerging = true, progressPercent = 0, lastStatus = "Initializing Media3 Transformer...")
             try {
@@ -2508,17 +2737,19 @@ class OmniAiViewModel(application: Application) : AndroidViewModel(application) 
             try {
                 db.downloadDao().updateProgress(record.id, "DOWNLOADING", 0, 0L)
                 val dest = File(record.filePath)
-                val bytes = kaggleClient.downloadFileWithProgress(
-                    downloadUrl = record.sourceUrl,
-                    targetFile = dest
-                ) { pct, downloaded ->
+                val outcome = resumableDownloadManager.downloadResumable(
+                    url = record.sourceUrl,
+                    targetFile = dest,
+                    allowedBaseDir = app.filesDir
+                ) { pct, downloaded, _ ->
                     viewModelScope.launch(Dispatchers.IO) {
                         db.downloadDao().updateProgress(record.id, "DOWNLOADING", pct, downloaded)
                     }
-                }
-                db.downloadDao().updateProgress(record.id, "COMPLETED", 100, bytes)
+                }.getOrThrow()
+                db.downloadDao().updateProgress(record.id, "COMPLETED", 100, outcome.totalBytes)
                 refreshStorageUsage()
-                postToast("Downloaded ${record.fileName}")
+                val resumeLabel = if (outcome.resumedFromBytes > 0L) " (resumed)" else ""
+                postToast("Downloaded ${record.fileName}$resumeLabel")
             } catch (ex: Exception) {
                 db.downloadDao().updateProgress(record.id, "FAILED", 0, 0L)
                 postToast("Retry failed: ${ex.message}")
@@ -2578,6 +2809,10 @@ class OmniAiViewModel(application: Application) : AndroidViewModel(application) 
     // TAB 5: VAULT, SECURITY, BACKUP/RESTORE, OTA & PANIC WIPE
     // =========================================================================
     fun saveVaultConfiguration(updated: VaultSnapshot): String? {
+        rolePermissionGuard.denyReasonForVaultWrite()?.let { deny ->
+            postToast(deny)
+            return deny
+        }
         if (updated.primaryTunnelUrl.isNotBlank()) {
             val validation = NetworkSecurityValidator.validateEndpointUrl(updated.primaryTunnelUrl)
             if (!validation.isValid) {
@@ -2587,6 +2822,7 @@ class OmniAiViewModel(application: Application) : AndroidViewModel(application) 
         vault.importSnapshot(updated)
         _vaultSnapshot.value = vault.exportSnapshot()
         _flagSecureEnabled.value = updated.flagSecureEnabled
+        supabaseAuthManager.refreshLocalSessionSnapshot()
         postToast("Encrypted Vault updated (AES-256-GCM).")
         return null
     }
@@ -3205,11 +3441,67 @@ class OmniAiViewModel(application: Application) : AndroidViewModel(application) 
         )
     }
 
-    fun saveTelegramCredentials(botToken: String, chatId: String) {
+    fun saveTelegramCredentials(
+        botToken: String,
+        chatId: String,
+        apiId: String = vault.telegramApiId,
+        apiHash: String = vault.telegramApiHash
+    ) {
         vault.telegramBotToken = botToken.trim()
         vault.telegramChatId = chatId.trim()
+        vault.telegramApiId = apiId.trim()
+        vault.telegramApiHash = apiHash.trim()
         _vaultSnapshot.value = vault.exportSnapshot()
-        postToast("Saved Telegram Bot credentials in Encrypted Vault.")
+        postToast("Saved Telegram Bot & 2 GB MTProto credentials in Encrypted Vault.")
+    }
+
+    fun autoDetectTelegramChatId(
+        overrideToken: String = vault.telegramBotToken,
+        onDetected: (String) -> Unit = {}
+    ) {
+        if (_isDetectingTelegramChatId.value) return
+        viewModelScope.launch {
+            _isDetectingTelegramChatId.value = true
+            try {
+                telegramBackupClient.autoDetectChatId(overrideToken).fold(
+                    onSuccess = { (chatId, label) ->
+                        vault.telegramBotToken = overrideToken.trim().ifBlank { vault.telegramBotToken }
+                        vault.telegramChatId = chatId
+                        _vaultSnapshot.value = vault.exportSnapshot()
+                        onDetected(chatId)
+                        val msg = "Auto-detected Chat ID $chatId ($label) and saved to Vault."
+                        _backupCenterStatus.value = msg
+                        postToast(msg)
+                    },
+                    onFailure = { ex ->
+                        val msg = "Auto-Detect Chat ID failed: ${ex.message}"
+                        _backupCenterStatus.value = msg
+                        postToast(msg)
+                    }
+                )
+            } finally {
+                _isDetectingTelegramChatId.value = false
+            }
+        }
+    }
+
+    fun buildKaggleSecretsSetupText(
+        botToken: String = vault.telegramBotToken,
+        chatId: String = vault.telegramChatId,
+        apiId: String = vault.telegramApiId,
+        apiHash: String = vault.telegramApiHash
+    ): String {
+        val maskedToken = botToken.trim().ifBlank { "<paste_from_BotFather>" }
+        val resolvedChat = chatId.trim().ifBlank { "<run_Auto_Detect_Chat_ID>" }
+        val resolvedApiId = apiId.trim().ifBlank { "<from_my.telegram.org>" }
+        val resolvedApiHash = apiHash.trim().ifBlank { "<from_my.telegram.org>" }
+        return """
+            # Kaggle Notebook -> Add-ons -> Secrets (Add these 4 exact labels & check Attach)
+            TG_BOT_TOKEN=$maskedToken
+            TG_CHAT_ID=$resolvedChat
+            TG_API_ID=$resolvedApiId
+            TG_API_HASH=$resolvedApiHash
+        """.trimIndent()
     }
 
     fun testTelegramBot() {
@@ -3757,6 +4049,10 @@ class OmniAiViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun deleteVideoScript(script: VideoScriptEntity) {
+        rolePermissionGuard.denyReasonForDelete()?.let {
+            postToast(it)
+            return
+        }
         viewModelScope.launch(Dispatchers.IO) {
             db.videoScriptDao().deleteScript(script)
             postToast("Deleted script '${script.title}'.")
@@ -4393,6 +4689,10 @@ class OmniAiViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun deleteProject(project: ProjectEntity) {
+        rolePermissionGuard.denyReasonForDelete()?.let {
+            postToast(it)
+            return
+        }
         viewModelScope.launch(Dispatchers.IO) {
             db.projectDao().deleteProject(project)
             runCatching { gitHubGitEngine.getProjectDir(project.slug).deleteRecursively() }
@@ -4460,6 +4760,10 @@ class OmniAiViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun deleteProjectTask(task: ProjectTaskEntity) {
+        rolePermissionGuard.denyReasonForDelete()?.let {
+            postToast(it)
+            return
+        }
         viewModelScope.launch(Dispatchers.IO) {
             db.projectDao().deleteTask(task)
             postToast("Removed task '${task.title}'.")
@@ -4776,5 +5080,682 @@ class OmniAiViewModel(application: Application) : AndroidViewModel(application) 
 
     fun setAiAutoCommitMessageEnabled(enabled: Boolean) {
         settingsRepo.update { it.copy(aiAutoCommitMessageEnabled = enabled) }
+    }
+
+    // =========================================================================
+    // v5.3 YOUTUBE DATA API v3 AUTO-UPLOADER, ANALYTICS, THUMBNAILS & META REELS
+    // =========================================================================
+
+    fun saveYouTubeChannelProfile(
+        label: String,
+        clientId: String,
+        clientSecret: String,
+        refreshToken: String,
+        defaultPrivacy: String = "private",
+        existingId: String? = null
+    ) {
+        val cleanLabel = label.trim().ifBlank { "Primary Channel" }
+        val profile = YouTubeChannelProfile(
+            id = existingId?.ifBlank { null } ?: "yt_${UUID.randomUUID().toString().take(8)}",
+            label = cleanLabel,
+            clientId = clientId.trim(),
+            clientSecret = clientSecret.trim(),
+            refreshToken = refreshToken.trim(),
+            defaultPrivacy = defaultPrivacy.ifBlank { "private" }
+        )
+        vault.saveYouTubeProfile(profile)
+        vault.selectYouTubeProfile(profile.id)
+        youTubeApiClient.clearTokenCache()
+        _youTubeProfiles.value = vault.getYouTubeProfiles()
+        _activeYouTubeProfileId.value = vault.activeYouTubeProfileId
+        postToast("Saved YouTube channel '$cleanLabel' to encrypted Vault.")
+    }
+
+    fun selectYouTubeChannelProfile(profileId: String) {
+        vault.selectYouTubeProfile(profileId)?.let { selected ->
+            _activeYouTubeProfileId.value = selected.id
+            postToast("Active YouTube Channel: ${selected.label}")
+        }
+    }
+
+    fun removeYouTubeChannelProfile(profileId: String) {
+        vault.removeYouTubeProfile(profileId)
+        youTubeApiClient.clearTokenCache()
+        _youTubeProfiles.value = vault.getYouTubeProfiles()
+        _activeYouTubeProfileId.value = vault.activeYouTubeProfileId
+        postToast("Removed YouTube channel profile.")
+    }
+
+    fun testYouTubeConnection(profileId: String? = null) {
+        viewModelScope.launch(Dispatchers.IO) {
+            postToast("Testing YouTube OAuth2 token refresh...")
+            youTubeApiClient.testConnection(profileId).fold(
+                onSuccess = { msg -> postToast(msg) },
+                onFailure = { err -> postToast("YouTube check failed: ${err.message}") }
+            )
+        }
+    }
+
+    fun saveMetaReelsCredentials(pageId: String, igUserId: String, pageAccessToken: String) {
+        vault.metaPageId = pageId.trim()
+        vault.metaIgUserId = igUserId.trim()
+        vault.metaPageAccessToken = pageAccessToken.trim()
+        postToast("Meta FB/IG Reels credentials saved to encrypted Vault.")
+    }
+
+    fun refreshYouTubeAnalytics(profileId: String? = null) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val resolvedProfileId = profileId?.ifBlank { null }
+                ?: activeNiche.value?.linkedYoutubeProfileId?.ifBlank { null }
+            youTubeAnalyticsRepository.refresh(resolvedProfileId).fold(
+                onSuccess = { (stats, videos) ->
+                    postToast("Synced ${stats.channelTitle}: ${videos.size} recent video(s) loaded.")
+                },
+                onFailure = { err ->
+                    postToast("YouTube Analytics sync failed: ${err.message}")
+                }
+            )
+        }
+    }
+
+    fun uploadVideoToYouTube(
+        videoFilePath: String,
+        title: String,
+        description: String,
+        tags: List<String> = emptyList(),
+        privacyStatus: String = settingsRepo.current.youtubeDefaultPrivacy,
+        publishAtIso: String = "",
+        firstComment: String = "",
+        thumbnailFilePath: String? = settingsRepo.current.activeThumbnailPath.ifBlank { null },
+        scriptId: Long? = null,
+        socialPostId: Long? = null
+    ) {
+        if (_isUploadingToYouTube.value) {
+            postToast("A YouTube upload is already in progress.")
+            return
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            _isUploadingToYouTube.value = true
+            _youTubeUploadProgress.value = 1
+            _youTubeUploadStatus.value = "Preparing resumable YouTube upload..."
+            try {
+                val linkedProfileId = activeNiche.value?.linkedYoutubeProfileId.orEmpty()
+                val req = YouTubeUploadRequest(
+                    videoFilePath = videoFilePath,
+                    thumbnailFilePath = thumbnailFilePath,
+                    title = title,
+                    description = description,
+                    tags = tags,
+                    privacyStatus = privacyStatus,
+                    publishAtIso = publishAtIso,
+                    firstComment = firstComment,
+                    profileId = linkedProfileId,
+                    scriptId = scriptId,
+                    socialPostId = socialPostId
+                )
+                youTubeApiClient.uploadVideoResumable(req) { pct, statusText ->
+                    _youTubeUploadProgress.value = pct
+                    _youTubeUploadStatus.value = statusText
+                }.fold(
+                    onSuccess = { res ->
+                        _youTubeUploadProgress.value = 100
+                        _youTubeUploadStatus.value = "Uploaded: ${res.watchUrl}"
+                        postToast("Published to YouTube (${res.channelLabel}): ${res.watchUrl}")
+                    },
+                    onFailure = { err ->
+                        _youTubeUploadStatus.value = "Upload failed: ${err.message}"
+                        postToast("YouTube upload failed: ${err.message}")
+                    }
+                )
+            } finally {
+                _isUploadingToYouTube.value = false
+            }
+        }
+    }
+
+    fun generateViralThumbnailHook(topicOrTitle: String, onResult: (String) -> Unit) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val sys = """
+                You are a viral YouTube thumbnail copywriter.
+                Return ONLY a punchy 2-to-4 word ALL-CAPS thumbnail hook (no quotes, no punctuation clutter, max 24 chars) that triggers instant curiosity.
+            """.trimIndent()
+            val prompt = "Video topic/title: ${topicOrTitle.ifBlank { activeNiche.value?.name ?: "Viral Story" }}"
+            val generated = runCatching {
+                val (raw, _) = aiClient.completeSinglePrompt(sys, prompt)
+                raw.lines().firstOrNull { it.isNotBlank() }
+                    ?.replace("\"", "")
+                    ?.trim()
+                    ?.take(28)
+                    .orEmpty()
+            }.getOrDefault("")
+            val finalHook = generated.ifBlank { "WAIT FOR IT" }
+            withContext(Dispatchers.Main) { onResult(finalHook) }
+        }
+    }
+
+    fun fetchYouTubeComments(videoIdOrUrl: String, onlyUnanswered: Boolean = true) {
+        viewModelScope.launch(Dispatchers.IO) {
+            _isLoadingYouTubeComments.value = true
+            _youTubeCommentStatus.value = "Fetching comments..."
+            try {
+                val profileId = activeNiche.value?.linkedYoutubeProfileId?.ifBlank { null }
+                youTubeApiClient.fetchComments(videoIdOrUrl, onlyUnanswered, profileId).fold(
+                    onSuccess = { list ->
+                        _youTubeComments.value = list
+                        _youTubeCommentStatus.value = "Loaded ${list.size} ${if (onlyUnanswered) "unanswered " else ""}comment(s)."
+                    },
+                    onFailure = { err ->
+                        _youTubeCommentStatus.value = err.message ?: "Failed to load comments."
+                    }
+                )
+            } finally {
+                _isLoadingYouTubeComments.value = false
+            }
+        }
+    }
+
+    fun generateAiCommentReplyDraft(comment: YouTubeCommentItem, onDraftReady: (String) -> Unit) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val nicheName = activeNiche.value?.name ?: "Creator"
+            val sys = """
+                You are the creator of a fast-growing YouTube channel in the "$nicheName" niche.
+                Write a warm, authentic, engaging 1-2 sentence reply to the viewer comment below.
+                Encourage conversation or tease the next episode without sounding robotic. Return ONLY the reply text.
+            """.trimIndent()
+            val prompt = "Viewer (${comment.authorDisplayName}) commented: \"${comment.textDisplay}\""
+            val reply = runCatching {
+                val (raw, _) = aiClient.completeSinglePrompt(sys, prompt)
+                raw.trim().removeSurrounding("\"")
+            }.getOrDefault("Appreciate you watching! Let me know what twist or topic you want us to cover in the next episode.")
+            withContext(Dispatchers.Main) { onDraftReady(reply) }
+        }
+    }
+
+    fun postYouTubeCommentReply(comment: YouTubeCommentItem, replyText: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val profileId = activeNiche.value?.linkedYoutubeProfileId?.ifBlank { null }
+            youTubeApiClient.postCommentReply(
+                parentCommentId = comment.topLevelCommentId,
+                replyText = replyText,
+                videoId = comment.videoId,
+                profileId = profileId
+            ).fold(
+                onSuccess = {
+                    _youTubeCommentStatus.value = "Posted reply to ${comment.authorDisplayName}."
+                    _youTubeComments.value = _youTubeComments.value.filterNot { it.topLevelCommentId == comment.topLevelCommentId }
+                    postToast("Reply posted to ${comment.authorDisplayName}!")
+                },
+                onFailure = { err ->
+                    _youTubeCommentStatus.value = "Reply failed: ${err.message}"
+                    postToast("Failed to post reply: ${err.message}")
+                }
+            )
+        }
+    }
+
+    // =========================================================================
+    // v5.4 NATIVE ADOBE EXPRESS & ADOBE FIREFLY BRIDGE + RETURN AUTO-ATTACH
+    // =========================================================================
+
+    fun refreshAdobeAppBindings() {
+        viewModelScope.launch(Dispatchers.IO) {
+            _adobeExpressStatus.value = AdobeAppBridge.resolveInstalledAdobeApp(app, AdobeTargetApp.ADOBE_EXPRESS)
+            _adobeFireflyStatus.value = AdobeAppBridge.resolveInstalledAdobeApp(app, AdobeTargetApp.ADOBE_FIREFLY)
+        }
+    }
+
+    fun bindAdobeAppPackage(target: AdobeTargetApp, packageName: String) {
+        AdobeAppBridge.setConfiguredPackage(app, target, packageName)
+        refreshAdobeAppBindings()
+        postToast("Bound ${target.displayName} to $packageName")
+    }
+
+    fun resetAdobeAppBinding(target: AdobeTargetApp) {
+        AdobeAppBridge.resetConfiguredPackage(app, target)
+        refreshAdobeAppBindings()
+        postToast("Reset ${target.displayName} binding to default (${target.defaultPackage})")
+    }
+
+    /**
+     * Called from LifecycleEventEffect(Lifecycle.Event.ON_RESUME) in AppNavigationShell.
+     * Shows the sleek 1-tap return banner whenever the user comes back from Adobe Express or Firefly.
+     */
+    fun onAppResumedCheckAdobeReturn() {
+        refreshAdobeAppBindings()
+        if (_awaitingAdobeThumbnailForScriptId.value != null) {
+            _showAdobeReturnBanner.value = true
+        }
+    }
+
+    fun dismissAdobeReturnBanner() {
+        _showAdobeReturnBanner.value = false
+        _awaitingAdobeThumbnailForScriptId.value = null
+        _awaitingAdobeSourceApp.value = ""
+    }
+
+    /**
+     * Copies a thumbnail picked from Android PickVisualMedia after returning from Adobe Express / Firefly
+     * into filesDir/thumbnails/script_{id}.jpg and binds it immediately to VideoScriptEntity & YouTubeApiClient.
+     */
+    fun attachPickedAdobeThumbnail(uri: Uri) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val targetScriptId = _awaitingAdobeThumbnailForScriptId.value?.takeIf { it > 0L }
+            val savedFile = AdobeAppBridge.copyPickedThumbnailToScriptStorage(
+                context = app,
+                pickedUri = uri,
+                scriptId = targetScriptId
+            )
+            if (savedFile != null) {
+                settingsRepo.update { it.copy(activeThumbnailPath = savedFile.absolutePath) }
+                if (targetScriptId != null) {
+                    runCatching {
+                        db.videoScriptDao().updateThumbnailPath(targetScriptId, savedFile.absolutePath)
+                    }
+                }
+                _showAdobeReturnBanner.value = false
+                _awaitingAdobeThumbnailForScriptId.value = null
+                _awaitingAdobeSourceApp.value = ""
+                postToast("Adobe thumbnail attached (${savedFile.name}) & bound to YouTube Direct Upload!")
+            } else {
+                postToast("Failed to copy selected thumbnail image.")
+            }
+        }
+    }
+
+    /**
+     * Generates a high-CTR, strictly text-free Adobe Firefly visual prompt combining Script Title,
+     * Active Niche visual style, and Character DNA via active AI (with automatic fallback),
+     * copies it to clipboard, and launches the installed native Adobe Firefly app.
+     */
+    fun launchAdobeFireflyForVideo(
+        title: String,
+        aspectRatio: String = "16:9",
+        scriptId: Long? = null
+    ) {
+        if (_isLaunchingAdobeBridge.value) return
+        viewModelScope.launch(Dispatchers.IO) {
+            _isLaunchingAdobeBridge.value = true
+            try {
+                val niche = activeNiche.value
+                val charProfile = niche?.defaultCharacterId?.let { charId ->
+                    characterProfiles.value.firstOrNull { it.id == charId }
+                } ?: characterProfiles.value.firstOrNull()
+
+                val cleanTitle = title.ifBlank { niche?.name ?: "Cinematic Viral Video" }
+                val orientationDesc = if (aspectRatio == "9:16") {
+                    "vertical 9:16 composition for YouTube Shorts / Reels"
+                } else {
+                    "widescreen 16:9 composition for YouTube Thumbnail"
+                }
+                val styleDesc = niche?.visualStylePreset?.ifBlank { "Cinematic Photorealism" } ?: "Cinematic Photorealism"
+                val dnaDesc = charProfile?.appearancePrompt?.takeIf { it.isNotBlank() }?.let {
+                    "Main Subject Character DNA: $it"
+                }.orEmpty()
+
+                val systemPrompt = """
+                    You are an elite YouTube thumbnail art director crafting prompts for Adobe Firefly.
+                    Convert the video title, niche style, and optional character DNA into ONE ultra-vivid, high-CTR visual generation prompt.
+                    Rules:
+                    - STRICTLY NO TEXT, NO LETTERS, NO WORDS, NO WATERMARKS, NO LOGOS in the image.
+                    - Emphasize dramatic Rim lighting, high color contrast, expressive focal subject, crisp depth of field, and clear negative space for a future title overlay.
+                    - Match the requested aspect ratio ($orientationDesc).
+                    - Return ONLY the clean single-paragraph Firefly prompt (max 90 words).
+                """.trimIndent()
+
+                val userPrompt = buildString {
+                    appendLine("Video Title: $cleanTitle")
+                    appendLine("Niche: ${niche?.name ?: "Creator"} | Visual Style: $styleDesc")
+                    if (dnaDesc.isNotBlank()) appendLine(dnaDesc)
+                    appendLine("Aspect Ratio: $orientationDesc")
+                }
+
+                val generatedPrompt = runCatching {
+                    val (raw, _) = aiClient.completeSinglePrompt(systemPrompt, userPrompt)
+                    raw.trim().removeSurrounding("\"")
+                }.getOrDefault("").ifBlank {
+                    "Ultra-high contrast $styleDesc key visual inspired by \"$cleanTitle\", $dnaDesc, dramatic rim lighting, dynamic expressive focal subject, clean negative space, $orientationDesc, 8k photorealistic detail, strictly no text, no letters, no watermark."
+                }
+
+                withContext(Dispatchers.Main) {
+                    val result = AdobeAppBridge.launchAdobeFireflyWithPrompt(app, generatedPrompt)
+                    if (result.launched) {
+                        _awaitingAdobeThumbnailForScriptId.value = scriptId ?: 0L
+                        _awaitingAdobeSourceApp.value = "Adobe Firefly"
+                        _showAdobeReturnBanner.value = false
+                    }
+                    postToast(result.message)
+                }
+                refreshAdobeAppBindings()
+            } finally {
+                _isLaunchingAdobeBridge.value = false
+            }
+        }
+    }
+
+    /**
+     * Extracts the target HD MP4 frame via MediaMetadataRetriever (or uses an existing Bitmap/image),
+     * copies a punchy viral 3-word hook to clipboard, and hands the frame directly to the installed
+     * native Adobe Express app via ACTION_SEND + FileProvider URI (strictly zero browser fallback).
+     */
+    fun launchAdobeExpressForVideo(
+        videoFilePath: String?,
+        title: String,
+        hookText: String = "",
+        timestampMs: Long = 1000L,
+        bitmapOverride: Bitmap? = null,
+        scriptId: Long? = null
+    ) {
+        if (_isLaunchingAdobeBridge.value) return
+        viewModelScope.launch(Dispatchers.IO) {
+            _isLaunchingAdobeBridge.value = true
+            try {
+                val frameFile = when {
+                    bitmapOverride != null -> AdobeAppBridge.saveBitmapForAdobeHandoff(app, bitmapOverride)
+                    !videoFilePath.isNullOrBlank() -> AdobeAppBridge.extractVideoFrameToFile(app, videoFilePath, timestampMs)
+                    settingsRepo.current.activeThumbnailPath.isNotBlank() -> File(settingsRepo.current.activeThumbnailPath)
+                    else -> null
+                }
+
+                val resolvedHook = hookText.trim().ifBlank {
+                    title.split(Regex("\\s+")).filter { it.isNotBlank() }.take(3).joinToString(" ").uppercase()
+                }
+
+                withContext(Dispatchers.Main) {
+                    val result = AdobeAppBridge.launchAdobeExpressWithFrame(
+                        context = app,
+                        frameFile = frameFile,
+                        optionalPromptText = resolvedHook
+                    )
+                    if (result.launched) {
+                        _awaitingAdobeThumbnailForScriptId.value = scriptId ?: 0L
+                        _awaitingAdobeSourceApp.value = "Adobe Express"
+                        _showAdobeReturnBanner.value = false
+                    }
+                    postToast(result.message)
+                }
+                refreshAdobeAppBindings()
+            } finally {
+                _isLaunchingAdobeBridge.value = false
+            }
+        }
+    }
+
+    // =========================================================================
+    // v5.5 SUPABASE POSTGRESQL COMPRESSED CLOUD DB, GOOGLE OAUTH PKCE & RBAC
+    // =========================================================================
+
+    fun saveSupabaseConfig(url: String, anonKey: String) {
+        rolePermissionGuard.denyReasonForVaultWrite()?.let { deny ->
+            postToast(deny)
+            return
+        }
+        val cleanUrl = url.trim().trimEnd('/')
+        if (cleanUrl.isNotBlank() && !cleanUrl.startsWith("https://")) {
+            postToast("SUPABASE_URL must start with https://")
+            return
+        }
+        vault.supabaseUrl = cleanUrl
+        vault.supabaseAnonKey = anonKey.trim()
+        _vaultSnapshot.value = vault.exportSnapshot()
+        supabaseAuthManager.refreshLocalSessionSnapshot()
+        postToast("Saved encrypted Supabase PostgreSQL config.")
+    }
+
+    fun startGoogleCloudSignIn(context: Context) {
+        supabaseAuthManager.startGoogleSignIn(context).fold(
+            onSuccess = { msg -> postToast(msg) },
+            onFailure = { ex -> postToast(ex.message ?: "Unable to launch Google Sign-In.") }
+        )
+    }
+
+    fun handleCloudAuthCallback(uri: Uri) {
+        viewModelScope.launch(Dispatchers.IO) {
+            _isRefreshingCloudStatus.value = true
+            try {
+                supabaseAuthManager.handleAuthCallback(uri).fold(
+                    onSuccess = { session ->
+                        if (session.role == CloudUserRole.PENDING) {
+                            postToast("Signed in as ${session.email}. Awaiting Owner approval in Supabase RBAC.")
+                        } else {
+                            postToast("Signed in as ${session.email} (${session.role.badgeText}). Syncing cloud delta...")
+                            cloudSyncRepository.syncNow()
+                            if (session.role == CloudUserRole.OWNER) {
+                                loadCloudTeamProfiles()
+                            }
+                        }
+                    },
+                    onFailure = { ex ->
+                        postToast(ex.message ?: "Google OAuth PKCE callback failed.")
+                    }
+                )
+            } finally {
+                _isRefreshingCloudStatus.value = false
+            }
+        }
+    }
+
+    fun refreshCloudApprovalStatus() {
+        if (_isRefreshingCloudStatus.value) return
+        viewModelScope.launch(Dispatchers.IO) {
+            _isRefreshingCloudStatus.value = true
+            try {
+                supabaseAuthManager.refreshProfileStatus().fold(
+                    onSuccess = { session ->
+                        postToast("Role refreshed: ${session.role.badgeText} (${if (session.isApproved) "Approved" else "Pending"})")
+                        if (session.isApproved) {
+                            cloudSyncRepository.syncNow()
+                        }
+                    },
+                    onFailure = { ex ->
+                        postToast(ex.message ?: "Could not refresh cloud role.")
+                    }
+                )
+            } finally {
+                _isRefreshingCloudStatus.value = false
+            }
+        }
+    }
+
+    fun enableOfflineLocalMode() {
+        supabaseAuthManager.enableOfflineLocalMode()
+        postToast("Switched to Offline Local Mode (100% local Room DB).")
+    }
+
+    fun signOutCloud() {
+        viewModelScope.launch(Dispatchers.IO) {
+            supabaseAuthManager.signOut()
+            _cloudTeamProfiles.value = emptyList()
+            postToast("Signed out of Supabase Cloud DB. Local data remains safe.")
+        }
+    }
+
+    fun syncCloudNow() {
+        viewModelScope.launch(Dispatchers.IO) {
+            cloudSyncRepository.syncNow().fold(
+                onSuccess = { summary ->
+                    postToast("Cloud Sync OK: ${summary.message}")
+                },
+                onFailure = { ex ->
+                    postToast(ex.message ?: "Cloud Delta Sync failed.")
+                }
+            )
+        }
+    }
+
+    fun setCloudSyncSchedule(intervalMinutes: Int, wifiOnly: Boolean) {
+        vault.cloudSyncIntervalMinutes = intervalMinutes
+        vault.cloudSyncWifiOnly = wifiOnly
+        _cloudSyncIntervalMinutes.value = intervalMinutes
+        _cloudSyncWifiOnly.value = wifiOnly
+        CloudSyncWorker.schedulePeriodicSync(app, intervalMinutes, wifiOnly)
+        val label = when {
+            intervalMinutes <= 0 -> "Manual only"
+            intervalMinutes >= 60 -> "Every ${intervalMinutes / 60}h"
+            else -> "Every ${intervalMinutes}m"
+        }
+        postToast("Cloud Delta Sync schedule: $label${if (wifiOnly) " (Wi-Fi Only)" else ""}.")
+    }
+
+    fun loadCloudTeamProfiles() {
+        if (_isLoadingCloudTeam.value) return
+        viewModelScope.launch(Dispatchers.IO) {
+            _isLoadingCloudTeam.value = true
+            try {
+                supabaseAuthManager.listAllUserProfiles().fold(
+                    onSuccess = { list ->
+                        _cloudTeamProfiles.value = list
+                    },
+                    onFailure = { ex ->
+                        postToast(ex.message ?: "Failed to load team profiles.")
+                    }
+                )
+            } finally {
+                _isLoadingCloudTeam.value = false
+            }
+        }
+    }
+
+    fun updateCloudUserRole(userId: String, newRole: String, isApproved: Boolean) {
+        viewModelScope.launch(Dispatchers.IO) {
+            supabaseAuthManager.updateUserRoleAndApproval(userId, newRole, isApproved).fold(
+                onSuccess = { updated ->
+                    _cloudTeamProfiles.value = _cloudTeamProfiles.value.map {
+                        if (it.id == updated.id) updated else it
+                    }
+                    postToast("Updated ${updated.email} -> ${updated.role} (${if (updated.isApproved) "Approved" else "Revoked"}).")
+                },
+                onFailure = { ex ->
+                    postToast(ex.message ?: "Role update rejected by Supabase RLS.")
+                }
+            )
+        }
+    }
+
+    // =========================================================================
+    // v5.0 RESILIENCE ENGINE: LAN WEB STUDIO, DIFF REVIEW, BUILD DOCTOR,
+    // DEVICE HEALTH GUARD, COMPLIANCE SCANNER & OUTBOX FLUSH
+    // =========================================================================
+
+    fun startLanWebServer(port: Int = LocalLanWebServer.DEFAULT_PORT) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val state = localLanWebServer.start(port)
+            if (state.isRunning) {
+                postToast("LAN Web Studio live at ${state.url} (PIN: ${state.accessPin})")
+            } else {
+                postToast(state.lastError ?: "Could not start LAN Web Studio.")
+            }
+        }
+    }
+
+    fun stopLanWebServer() {
+        viewModelScope.launch(Dispatchers.IO) {
+            localLanWebServer.stop()
+            postToast("Local Wi-Fi Web Studio stopped.")
+        }
+    }
+
+    fun refreshDeviceHealth() {
+        _deviceHealth.value = deviceHealthGuard.inspect()
+    }
+
+    fun prepareProjectDiffReview(
+        project: ProjectEntity,
+        onReady: (GitDiffResult, List<DiffPreviewFile>, SecretScanReport) -> Unit
+    ) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val diff = gitHubGitEngine.scanLocalChanges(project)
+            val projectRoot = gitHubGitEngine.getProjectDir(project.slug)
+            val pendingPaths = (diff.added + diff.modified).distinct()
+            val secretReport = SecretLeakScanner.scanDirectory(projectRoot, pendingPaths)
+            _lastSecretScanReport.value = secretReport
+
+            val previews = buildList {
+                diff.added.forEach { rel ->
+                    val file = AiMultiFileSplitter.resolveConfinedFile(projectRoot, rel)
+                    val lines = runCatching {
+                        file?.readLines(Charsets.UTF_8)?.take(18)?.map { "+ $it" }.orEmpty()
+                    }.getOrDefault(emptyList())
+                    add(DiffPreviewFile(rel, "ADDED", lines))
+                }
+                diff.modified.forEach { rel ->
+                    val file = AiMultiFileSplitter.resolveConfinedFile(projectRoot, rel)
+                    val lines = runCatching {
+                        file?.readLines(Charsets.UTF_8)?.take(18)?.map { "+ $it" }.orEmpty()
+                    }.getOrDefault(emptyList())
+                    add(DiffPreviewFile(rel, "MODIFIED", lines))
+                }
+                diff.deleted.forEach { rel ->
+                    add(DiffPreviewFile(rel, "DELETED", listOf("- (File removed from local project workspace)")))
+                }
+            }
+
+            withContext(Dispatchers.Main) {
+                onReady(diff, previews, secretReport)
+            }
+        }
+    }
+
+    fun scanActiveProjectForSecretLeaks() {
+        val project = activeProject.value
+        if (project == null) {
+            postToast("Select a project first to scan for leaked secrets.")
+            return
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            val rootDir = gitHubGitEngine.getProjectDir(project.slug)
+            val report = SecretLeakScanner.scanDirectory(rootDir)
+            _lastSecretScanReport.value = report
+            if (report.isClean) {
+                postToast("Secret Leak Scanner: 0 leaks across ${report.scannedFileCount} file(s).")
+            } else {
+                postToast("Warning: ${report.findings.size} potential secret leak(s) detected!")
+            }
+        }
+    }
+
+    fun runAiBuildDoctor(owner: String, repo: String, runId: Long) {
+        if (_isRunningBuildDoctor.value) return
+        viewModelScope.launch(Dispatchers.IO) {
+            _isRunningBuildDoctor.value = true
+            try {
+                aiBuildDoctor.diagnoseFailedRun(owner, repo, runId).fold(
+                    onSuccess = { diagnosis ->
+                        _lastBuildDiagnosis.value = diagnosis
+                        postToast("AI Build Doctor diagnosed run #$runId via ${diagnosis.providerTag}.")
+                    },
+                    onFailure = { ex ->
+                        postToast("AI Build Doctor failed: ${ex.message}")
+                    }
+                )
+            } finally {
+                _isRunningBuildDoctor.value = false
+            }
+        }
+    }
+
+    fun dismissBuildDiagnosis() {
+        _lastBuildDiagnosis.value = null
+    }
+
+    fun scanYouTubePolicyCompliance(
+        title: String,
+        description: String,
+        tags: List<String>,
+        narrationPreview: String = ""
+    ): ComplianceScanReport {
+        val report = PolicyComplianceScanner.scan(
+            title = title,
+            description = description,
+            tags = tags,
+            narrationPreview = narrationPreview
+        )
+        _lastComplianceReport.value = report
+        postToast(report.summary)
+        return report
+    }
+
+    fun enqueueOutboxFlush() {
+        OutboxFlushWorker.scheduleOnReconnect(app)
+        postToast("Queued Outbox Flush for network reconnect.")
     }
 }

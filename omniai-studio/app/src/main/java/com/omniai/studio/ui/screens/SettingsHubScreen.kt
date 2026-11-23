@@ -25,6 +25,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.AdminPanelSettings
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material.icons.filled.Bolt
@@ -88,9 +89,16 @@ import androidx.fragment.app.FragmentActivity
 import com.omniai.studio.BuildConfig
 import com.omniai.studio.data.local.AppSettingsRepository
 import com.omniai.studio.data.local.AutoTypeSpeedMode
+import androidx.compose.material.icons.filled.Apps
+import androidx.compose.material.icons.filled.ErrorOutline
+import com.omniai.studio.media.AdobeAppPickerDialog
+import com.omniai.studio.media.AdobeTargetApp
 import com.omniai.studio.media.StorageGalleryHelper
 import com.omniai.studio.security.AppIconVariant
 import com.omniai.studio.security.AutoLockTimeout
+import com.omniai.studio.ui.guides.PlatformGuideBottomSheet
+import com.omniai.studio.ui.guides.PlatformGuideId
+import com.omniai.studio.ui.guides.PlatformGuideTriggerButton
 import com.omniai.studio.ui.theme.AmoledBlack
 import com.omniai.studio.ui.theme.AmoledBorder
 import com.omniai.studio.ui.theme.AmoledSurface
@@ -109,15 +117,19 @@ fun SettingsHubScreen(
     onBack: () -> Unit,
     onOpenDirector: () -> Unit = {},
     onOpenBackupCenter: () -> Unit = {},
+    onOpenCloudAccount: () -> Unit = {},
     onOpenAnalytics: () -> Unit = {},
     onOpenThemeStudio: () -> Unit = {},
-    onOpenTerminal: () -> Unit = {}
+    onOpenTerminal: () -> Unit = {},
+    onRunGuideCommandInTerminal: (String) -> Unit = {}
 ) {
     val clipboard = LocalClipboardManager.current
     val settings by viewModel.appSettings.collectAsState()
     val uiConfig by viewModel.uiConfig.collectAsState()
     val isNetlogEnabled by viewModel.isNetlogEnabled.collectAsState()
     val vaultSnapshot by viewModel.vaultSnapshot.collectAsState()
+    val cloudRole by viewModel.cloudRole.collectAsState()
+    val cloudSyncStatus by viewModel.cloudSyncStatus.collectAsState()
     val storage by viewModel.storageUsage.collectAsState()
     val otaState by viewModel.otaState.collectAsState()
     val crashLog by viewModel.crashLogText.collectAsState()
@@ -129,6 +141,8 @@ fun SettingsHubScreen(
     val failedPinAuditLog by viewModel.failedPinAuditLog.collectAsState()
     val autoWipeThreshold by viewModel.autoWipeThreshold.collectAsState()
     val tunnelWatchdogEnabled by viewModel.tunnelWatchdogEnabled.collectAsState()
+    val adobeExpressStatus by viewModel.adobeExpressStatus.collectAsState()
+    val adobeFireflyStatus by viewModel.adobeFireflyStatus.collectAsState()
 
     var searchQuery by remember { mutableStateOf("") }
     var pendingIconVariant by remember { mutableStateOf<AppIconVariant?>(null) }
@@ -136,6 +150,8 @@ fun SettingsHubScreen(
     var backupPassword by remember { mutableStateOf("") }
     var pendingBackupMode by remember { mutableStateOf<String?>(null) }
     var panicStep by remember { mutableStateOf(0) }
+    var activeGuideId by remember { mutableStateOf<PlatformGuideId?>(null) }
+    var adobePickerTarget by remember { mutableStateOf<AdobeTargetApp?>(null) }
 
     // News Tracker RSS input state
     var newFeedName by remember { mutableStateOf("") }
@@ -154,6 +170,7 @@ fun SettingsHubScreen(
     LaunchedEffect(Unit) {
         viewModel.refreshStorageUsage()
         viewModel.refreshCrashLog()
+        viewModel.refreshAdobeAppBindings()
     }
 
     val exportBackupLauncher = rememberLauncherForActivityResult(
@@ -327,6 +344,44 @@ fun SettingsHubScreen(
                                     }
                                 }
                             }
+                        }
+                    }
+                }
+            }
+        }
+
+        // v5.5 Cloud DB & Roles (Supabase PostgreSQL Compressed Delta Sync + Google OAuth PKCE)
+        if (matchesSearch("cloud", "supabase", "postgres", "google", "oauth", "rbac", "roles", "sync", "team")) {
+            item {
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    border = BorderStroke(1.dp, EmeraldAccent.copy(alpha = 0.45f))
+                ) {
+                    Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("Cloud DB & Roles (Supabase + Google RBAC)", style = MaterialTheme.typography.titleMedium)
+                                Text(
+                                    "Active Role: ${cloudRole.badgeText} · ${cloudSyncStatus.lastMessage}",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = TextSecondary
+                                )
+                            }
+                            PlatformGuideTriggerButton(
+                                onClick = { activeGuideId = PlatformGuideId.SUPABASE_CLOUD }
+                            )
+                        }
+                        Button(
+                            onClick = onOpenCloudAccount,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Icon(Icons.Filled.AdminPanelSettings, contentDescription = null)
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Open Cloud DB, Delta Sync & Team Roles")
                         }
                     }
                 }
@@ -622,14 +677,62 @@ fun SettingsHubScreen(
         // =====================================================================
         // SECTION 3: AUTOMATION & DOWNLOAD RULES
         // =====================================================================
-        if (matchesSearch("automation", "download", "wifi", "kaggle", "poll", "quota", "gpu", "watchdog", "webhook", "discord", "n8n", "slack")) {
+        if (matchesSearch("automation", "download", "wifi", "kaggle", "telegram", "mtproto", "2gb", "guide", "poll", "quota", "gpu", "watchdog", "webhook", "discord", "n8n", "slack")) {
         item {
             Card(
                 colors = CardDefaults.cardColors(containerColor = AmoledSurface),
                 border = BorderStroke(1.dp, AmoledBorder)
             ) {
                 Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text("3. Automation & Download Rules", style = MaterialTheme.typography.titleMedium, color = primaryColor)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("3. Automation & Download Rules", style = MaterialTheme.typography.titleMedium, color = primaryColor)
+                        PlatformGuideTriggerButton(
+                            label = "? Kaggle Guide",
+                            onClick = { activeGuideId = PlatformGuideId.KAGGLE_WORKER }
+                        )
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Direct Kaggle → Telegram Upload (Up to 2 GB)", style = MaterialTheme.typography.bodyMedium)
+                            Text("Headless Telethon MTProto upload directly from Kaggle GPU", style = MaterialTheme.typography.labelMedium, color = TextSecondary)
+                        }
+                        Switch(
+                            checked = settings.directKaggleTelegramUpload,
+                            onCheckedChange = { viewModel.setDirectKaggleTelegramUpload(it) }
+                        )
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Save Mobile Data (Skip Phone Download if Sent to Telegram)", style = MaterialTheme.typography.bodyMedium)
+                            Text("Avoids pulling large MP4 onto phone; download a copy anytime in Queue", style = MaterialTheme.typography.labelMedium, color = TextSecondary)
+                        }
+                        Switch(
+                            checked = settings.skipPhoneDownloadWhenSentToTelegram,
+                            enabled = settings.directKaggleTelegramUpload,
+                            onCheckedChange = { viewModel.setSkipPhoneDownloadWhenSentToTelegram(it) }
+                        )
+                    }
+
+                    PlatformGuideTriggerButton(
+                        label = "? Telegram 2 GB MTProto Setup Guide & Commands",
+                        onClick = { activeGuideId = PlatformGuideId.TELEGRAM_2GB }
+                    )
+
+                    HorizontalDivider(color = AmoledBorder)
 
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -1375,6 +1478,144 @@ fun SettingsHubScreen(
             }
         }
         }
+
+        // =====================================================================
+        // MEDIA & EXTERNAL APPS: ADOBE EXPRESS & FIREFLY APP BINDING (v5.4)
+        // =====================================================================
+        if (matchesSearch("media", "external", "apps", "adobe", "express", "firefly", "thumbnail", "bind", "package")) {
+            item {
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = AmoledSurface),
+                    border = BorderStroke(1.dp, AmoledBorder)
+                ) {
+                    Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Icon(Icons.Filled.Apps, contentDescription = null, tint = primaryColor)
+                                Column {
+                                    Text("Media & External Apps", style = MaterialTheme.typography.titleMedium, color = primaryColor)
+                                    Text(
+                                        "Adobe Express & Firefly App Binding (Strictly Native Apps)",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = TextSecondary
+                                    )
+                                }
+                            }
+                            TextButton(onClick = { viewModel.refreshAdobeAppBindings() }) {
+                                Text("Rescan")
+                            }
+                        }
+
+                        // Adobe Express Row
+                        Surface(
+                            color = AmoledSurfaceVariant,
+                            border = BorderStroke(1.dp, AmoledBorder),
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(10.dp),
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text("Adobe Express", style = MaterialTheme.typography.titleSmall)
+                                    val expressAccent = if (adobeExpressStatus.isInstalled) EmeraldAccent else CrimsonDanger
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = if (adobeExpressStatus.isInstalled) Icons.Filled.CheckCircle else Icons.Filled.ErrorOutline,
+                                            contentDescription = null,
+                                            tint = expressAccent,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                        Text(
+                                            text = if (adobeExpressStatus.isInstalled) "Installed" else "Not Found",
+                                            style = MaterialTheme.typography.labelMedium,
+                                            color = expressAccent
+                                        )
+                                    }
+                                }
+                                Text(
+                                    text = "Package: ${adobeExpressStatus.resolvedPackage ?: adobeExpressStatus.configuredPackage}",
+                                    fontFamily = FontFamily.Monospace,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = TextSecondary
+                                )
+                                OutlinedButton(
+                                    onClick = { adobePickerTarget = AdobeTargetApp.ADOBE_EXPRESS },
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Text("Change Bound App")
+                                }
+                            }
+                        }
+
+                        // Adobe Firefly Row
+                        Surface(
+                            color = AmoledSurfaceVariant,
+                            border = BorderStroke(1.dp, AmoledBorder),
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(10.dp),
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text("Adobe Firefly", style = MaterialTheme.typography.titleSmall)
+                                    val fireflyAccent = if (adobeFireflyStatus.isInstalled) EmeraldAccent else CrimsonDanger
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = if (adobeFireflyStatus.isInstalled) Icons.Filled.CheckCircle else Icons.Filled.ErrorOutline,
+                                            contentDescription = null,
+                                            tint = fireflyAccent,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                        Text(
+                                            text = if (adobeFireflyStatus.isInstalled) "Installed" else "Not Found",
+                                            style = MaterialTheme.typography.labelMedium,
+                                            color = fireflyAccent
+                                        )
+                                    }
+                                }
+                                Text(
+                                    text = "Package: ${adobeFireflyStatus.resolvedPackage ?: adobeFireflyStatus.configuredPackage}",
+                                    fontFamily = FontFamily.Monospace,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = TextSecondary
+                                )
+                                OutlinedButton(
+                                    onClick = { adobePickerTarget = AdobeTargetApp.ADOBE_FIREFLY },
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Text("Change Bound App")
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     // Confirmation Dialog for Dynamic App Icon Switch
@@ -1528,6 +1769,39 @@ fun SettingsHubScreen(
             dismissButton = {
                 OutlinedButton(onClick = { panicStep = 0 }) { Text("Abort") }
             }
+        )
+    }
+
+    activeGuideId?.let { guideId ->
+        PlatformGuideBottomSheet(
+            guideId = guideId,
+            onDismiss = { activeGuideId = null },
+            onToast = { viewModel.postToast(it) },
+            onRunInTerminal = { command ->
+                activeGuideId = null
+                onRunGuideCommandInTerminal(command)
+            }
+        )
+    }
+
+    adobePickerTarget?.let { target ->
+        val currentPkg = if (target == AdobeTargetApp.ADOBE_EXPRESS) {
+            adobeExpressStatus.configuredPackage
+        } else {
+            adobeFireflyStatus.configuredPackage
+        }
+        AdobeAppPickerDialog(
+            targetApp = target,
+            currentPackage = currentPkg,
+            onSelectPackage = { pkg ->
+                viewModel.bindAdobeAppPackage(target, pkg)
+                adobePickerTarget = null
+            },
+            onResetDefault = {
+                viewModel.resetAdobeAppBinding(target)
+                adobePickerTarget = null
+            },
+            onDismiss = { adobePickerTarget = null }
         )
     }
 }

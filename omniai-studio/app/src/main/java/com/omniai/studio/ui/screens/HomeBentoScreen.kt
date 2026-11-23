@@ -25,9 +25,13 @@ import androidx.compose.material.icons.filled.CloudUpload
 import androidx.compose.material.icons.filled.FolderSpecial
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MovieCreation
+import androidx.compose.material.icons.filled.PlayCircle
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
@@ -89,6 +93,9 @@ fun HomeBentoScreen(
     val chatThreads by viewModel.chatThreads.collectAsState()
     val downloads by viewModel.downloads.collectAsState()
     val renderJobs by viewModel.renderJobs.collectAsState()
+    val ytStats by viewModel.youTubeChannelStats.collectAsState()
+    val ytDailyQuota by viewModel.youTubeTodayQuotaUnits.collectAsState()
+    val isRefreshingYt by viewModel.isRefreshingYouTubeStats.collectAsState()
 
     LaunchedEffect(activeProject?.id) {
         activeProject?.let { viewModel.refreshProjectWorkspace(it.id) }
@@ -434,6 +441,101 @@ fun HomeBentoScreen(
                         maxLines = 1
                     )
                 }
+            }
+        }
+
+        // BENTO ROW 3 (v5.3): YouTube Channel Performance & Daily API Quota Card
+        item {
+            val quotaFrac = (ytDailyQuota / 10000f).coerceIn(0f, 1f)
+            val quotaColor = when {
+                ytDailyQuota >= 8500 -> CrimsonDanger
+                ytDailyQuota >= 6000 -> AmberWarning
+                else -> EmeraldAccent
+            }
+            OmniSurfaceCard(onClick = onOpenAnalytics) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(38.dp)
+                                .clip(CircleShape)
+                                .background(CrimsonDanger.omniAccentContainer()),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.PlayCircle,
+                                contentDescription = null,
+                                tint = CrimsonDanger,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                        Column {
+                            Text(
+                                text = ytStats?.channelTitle?.ifBlank { "YouTube Studio Sync" } ?: "YouTube Studio Sync",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.SemiBold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Text(
+                                text = if (ytStats != null) {
+                                    "%,d subs · %,d views · %d videos".format(
+                                        ytStats!!.subscriberCount,
+                                        ytStats!!.viewCount,
+                                        ytStats!!.videoCount
+                                    )
+                                } else {
+                                    "Tap Sync to pull channel stats & feed AI hooks"
+                                },
+                                style = MaterialTheme.typography.labelSmall,
+                                color = colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+                    IconButton(
+                        enabled = !isRefreshingYt,
+                        onClick = { viewModel.refreshYouTubeAnalytics() }
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Refresh,
+                            contentDescription = "Refresh YouTube Stats",
+                            tint = primaryColor
+                        )
+                    }
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        text = "Daily YT API Quota",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        text = "%,d / 10,000 units".format(ytDailyQuota),
+                        fontFamily = FontFamily.Monospace,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = quotaColor
+                    )
+                }
+                LinearProgressIndicator(
+                    progress = { quotaFrac },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(4.dp)),
+                    color = quotaColor
+                )
             }
         }
 

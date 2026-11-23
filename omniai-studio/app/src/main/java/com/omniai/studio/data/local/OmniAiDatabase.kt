@@ -36,9 +36,10 @@ import androidx.room.RoomDatabase
         ProjectEntity::class,
         ProjectTaskEntity::class,
         ProjectFileIndexEntity::class,
-        GitCommitLogEntity::class
+        GitCommitLogEntity::class,
+        YouTubeQuotaEntity::class
     ],
-    version = 9,
+    version = 11,
     exportSchema = false
 )
 abstract class OmniAiDatabase : RoomDatabase() {
@@ -62,6 +63,7 @@ abstract class OmniAiDatabase : RoomDatabase() {
     abstract fun nextCommandDao(): NextCommandDao
     abstract fun seriesEpisodeDao(): SeriesEpisodeDao
     abstract fun projectDao(): ProjectDao
+    abstract fun youtubeQuotaDao(): YouTubeQuotaDao
 
     companion object {
         @Volatile

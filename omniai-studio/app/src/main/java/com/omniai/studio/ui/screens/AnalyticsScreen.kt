@@ -15,12 +15,14 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -61,6 +63,10 @@ fun AnalyticsScreen(
     val metrics by viewModel.apiMetrics.collectAsState()
     val weeklyUsedGpuHours by viewModel.weeklyUsedGpuHours.collectAsState()
     val recentRenderLogs by viewModel.recentRenderLogs.collectAsState()
+    val ytStats by viewModel.youTubeChannelStats.collectAsState()
+    val ytRecentVideos by viewModel.youTubeRecentVideos.collectAsState()
+    val isRefreshingYt by viewModel.isRefreshingYouTubeStats.collectAsState()
+    val ytDailyQuota by viewModel.youTubeTodayQuotaUnits.collectAsState()
     val primaryColor = MaterialTheme.colorScheme.primary
 
     val totalCalls = metrics.size
@@ -275,6 +281,91 @@ fun AnalyticsScreen(
                                 style = MaterialTheme.typography.labelMedium,
                                 color = if (log.status == "COMPLETED") EmeraldAccent else CrimsonDanger
                             )
+                        }
+                    }
+                }
+            }
+        }
+
+        // Chart 4 (v5.3): Closed-Loop YouTube Channel Performance & Daily API Quota Meter
+        item {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = AmoledSurface),
+                border = BorderStroke(1.dp, AmoledBorder)
+            ) {
+                Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = ytStats?.channelTitle?.ifBlank { "YouTube Channel Analytics" } ?: "YouTube Channel Analytics",
+                                style = MaterialTheme.typography.titleMedium,
+                                color = primaryColor
+                            )
+                            Text(
+                                text = "Closed-loop feedback automatically guides ContinuityEngine hooks",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = TextSecondary
+                            )
+                        }
+                        OutlinedButton(
+                            enabled = !isRefreshingYt,
+                            onClick = { viewModel.refreshYouTubeAnalytics() }
+                        ) {
+                            Icon(Icons.Filled.Refresh, contentDescription = null)
+                            Text(if (isRefreshingYt) "Sync..." else "Sync")
+                        }
+                    }
+
+                    // Daily Quota Tracker (10,000 units/day free limit)
+                    val quotaPct = (ytDailyQuota / 10000f).coerceIn(0f, 1f)
+                    val quotaColor = when {
+                        ytDailyQuota >= 8500 -> CrimsonDanger
+                        ytDailyQuota >= 6000 -> AmberWarning
+                        else -> EmeraldAccent
+                    }
+                    Text(
+                        text = "YouTube API Daily Quota: %,d / 10,000 units (~1,650 per upload)".format(ytDailyQuota),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = quotaColor
+                    )
+                    LinearProgressIndicator(
+                        progress = { quotaPct },
+                        modifier = Modifier.fillMaxWidth(),
+                        color = quotaColor
+                    )
+
+                    if (ytStats != null) {
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            MetricKpiCard("Subscribers", "%,d".format(ytStats!!.subscriberCount), EmeraldAccent, Modifier.weight(1f))
+                            MetricKpiCard("Total Views", "%,d".format(ytStats!!.viewCount), Color(0xFF06B6D4), Modifier.weight(1f))
+                            MetricKpiCard("Videos", "${ytStats!!.videoCount}", primaryColor, Modifier.weight(1f))
+                        }
+                    } else {
+                        Text(
+                            text = "Tap Sync after saving your YouTube OAuth2 credentials in API Vault to pull live channel stats & recent video performance.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = TextSecondary
+                        )
+                    }
+
+                    if (ytRecentVideos.isNotEmpty()) {
+                        Text("Recent 5 Videos Performance", style = MaterialTheme.typography.labelMedium, color = TextSecondary)
+                        ytRecentVideos.take(5).forEach { vid ->
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text(vid.title.take(28), style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
+                                Text(
+                                    "%,d views · %d likes · %d cmt".format(vid.viewCount, vid.likeCount, vid.commentCount),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = EmeraldAccent
+                                )
+                            }
                         }
                     }
                 }

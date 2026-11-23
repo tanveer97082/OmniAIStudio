@@ -63,7 +63,7 @@ test('Real OmniAI-Studio monorepo on disk passes every Build Matrix, Security, M
   const repoRoot = path.resolve(process.cwd(), 'omniai-studio');
   const files = loadDiskMonorepoFiles(repoRoot);
 
-  assert.ok(files.length >= 110, `Expected >= 110 monorepo files, got ${files.length}`);
+  assert.ok(files.length >= 136, `Expected >= 136 monorepo files, got ${files.length}`);
   assert.equal(
     files.some((f) => f.path.includes('__pycache__') || f.path.endsWith('.pyc')),
     false,
@@ -76,7 +76,7 @@ test('Real OmniAI-Studio monorepo on disk passes every Build Matrix, Security, M
   );
 
   const checks = auditMonorepo(files);
-  assert.equal(checks.length, 53, `Expected 53 audit checks, got ${checks.length}`);
+  assert.equal(checks.length, 70, `Expected 70 audit checks, got ${checks.length}`);
   for (const check of checks) {
     assert.equal(check.passed, true, `Audit check failed: ${check.label} (${check.detail})`);
   }
@@ -84,10 +84,35 @@ test('Real OmniAI-Studio monorepo on disk passes every Build Matrix, Security, M
   const tree = buildDirectoryTree(files);
   assert.ok(tree.some((node) => node.name === '.github' && node.isDirectory));
   assert.ok(tree.some((node) => node.name === 'kaggle_worker' && node.isDirectory));
+  assert.ok(tree.some((node) => node.name === 'supabase' && node.isDirectory));
   assert.ok(tree.some((node) => node.name === 'app' && node.isDirectory));
 
   const ascii = formatDirectoryTreeAscii(files);
   assert.ok(ascii.includes('OmniAI-Studio/'));
+  assert.ok(ascii.includes('schema_and_rls.sql'));
+  assert.ok(ascii.includes('keep-supabase-alive.yml'));
+  assert.ok(ascii.includes('PayloadGzipCodec.kt'));
+  assert.ok(ascii.includes('RolePermissionGuard.kt'));
+  assert.ok(ascii.includes('SupabaseAuthManager.kt'));
+  assert.ok(ascii.includes('CloudSyncRepository.kt'));
+  assert.ok(ascii.includes('CloudSyncWorker.kt'));
+  assert.ok(ascii.includes('CloudAccountScreen.kt'));
+  assert.ok(ascii.includes('AiBuildDoctor.kt'));
+  assert.ok(ascii.includes('SecretLeakScanner.kt'));
+  assert.ok(ascii.includes('DiffReviewDialog.kt'));
+  assert.ok(ascii.includes('LocalLanWebServer.kt'));
+  assert.ok(ascii.includes('ResumableDownloadManager.kt'));
+  assert.ok(ascii.includes('ApiKeyPoolManager.kt'));
+  assert.ok(ascii.includes('DeviceHealthGuard.kt'));
+  assert.ok(ascii.includes('PolicyComplianceScanner.kt'));
+  assert.ok(ascii.includes('OutboxFlushWorker.kt'));
+  assert.ok(ascii.includes('AdobeAppBridge.kt'));
+  assert.ok(ascii.includes('YouTubeApiClient.kt'));
+  assert.ok(ascii.includes('YouTubeAnalyticsRepository.kt'));
+  assert.ok(ascii.includes('CommentAssistantSheet.kt'));
+  assert.ok(ascii.includes('ThumbnailStudioSheet.kt'));
+  assert.ok(ascii.includes('PlatformSetupGuides.kt'));
+  assert.ok(ascii.includes('PlatformGuideBottomSheet.kt'));
   assert.ok(ascii.includes('DesignTokens.kt'));
   assert.ok(ascii.includes('AppNavigationShell.kt'));
   assert.ok(ascii.includes('HomeBentoScreen.kt'));

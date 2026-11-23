@@ -58,7 +58,13 @@ class RenderQueueForegroundService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        val notification = buildNotification("OmniAI Render Queue", "Preparing batch pipeline...", 0)
+        val action = intent?.action
+        val downloadJobId = intent?.getLongExtra(EXTRA_DOWNLOAD_JOB_ID, -1L) ?: -1L
+        val notification = buildNotification(
+            "OmniAI Render Queue",
+            if (action == ACTION_DOWNLOAD_COPY) "Downloading copy from Kaggle Output..." else "Preparing batch pipeline...",
+            0
+        )
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             startForeground(
                 NOTIFICATION_ID,
@@ -67,6 +73,17 @@ class RenderQueueForegroundService : Service() {
             )
         } else {
             startForeground(NOTIFICATION_ID, notification)
+        }
+
+        if (action == ACTION_DOWNLOAD_COPY && downloadJobId > 0L) {
+            serviceScope.launch {
+                downloadExistingKaggleCopy(downloadJobId)
+                if (processorJob?.isActive != true) {
+                    stopForeground(STOP_FOREGROUND_REMOVE)
+                    stopSelf()
+                }
+            }
+            return START_REDELIVER_INTENT
         }
 
         if (processorJob?.isActive != true) {
@@ -153,7 +170,77 @@ class RenderQueueForegroundService : Service() {
                 }
             }
 
-            // 4. Enforce Wi-Fi Only Auto-Download rule if enabled in Settings
+            val parsedPayload = runCatching {
+                Json { ignoreUnknownKeys = true }.decodeFromString<StoryboardPayload>(job.scenesPayloadJson)
+            }.getOrNull()
+            val directTelegramUpload = parsedPayload?.directTelegramUpload == true
+            val skipPhoneDownload = directTelegramUpload && (parsedPayload?.skipPhoneDownload == true)
+
+            // 4. v5.2 Save Mobile Data mode: if Kaggle uploaded directly to Telegram (up to 2 GB MTProto),
+            // skip downloading the large MP4 onto the phone and mark complete immediately.
+            if (skipPhoneDownload) {
+                val tgMessage = "Video uploaded directly from Kaggle to Telegram!"
+                renderDao.updateStatus(
+                    jobId = job.id,
+                    status = "COMPLETED",
+                    progress = 100,
+                    message = tgMessage,
+                    outputPath = ""
+                )
+                val elapsedSeconds = ((System.currentTimeMillis() - startedAtMs) / 1000L).coerceAtLeast(1L)
+                renderLogDao.insert(
+                    RenderLogEntity(
+                        jobId = job.id,
+                        title = job.title,
+                        status = "COMPLETED",
+                        durationSeconds = elapsedSeconds,
+                        accountLabel = activeAccountLabel
+                    )
+                )
+
+                runCatching {
+                    job.scriptId?.let { scriptId ->
+                        db.videoScriptDao().markScriptRendered(
+                            scriptId = scriptId,
+                            status = "RENDERED",
+                            videoPath = "telegram://kaggle-direct"
+                        )
+                    }
+                    job.seriesEpisodeId?.let { epId ->
+                        db.seriesEpisodeDao().updateEpisodeStatus(
+                            episodeId = epId,
+                            status = "RENDERED",
+                            linkedScriptId = job.scriptId
+                        )
+                    }
+                    db.nicheDao().incrementEpisodeCount(job.nicheId)
+
+                    if (settingsRepo.current.autoGenerateNextAfterRender) {
+                        val finalNarration = parsedPayload?.scenes?.lastOrNull()?.narration.orEmpty()
+                        val app = application as? OmniAiApplication
+                        app?.continuityEngine?.generatePostVideoNextCommands(
+                            nicheId = job.nicheId,
+                            sourceScriptId = job.scriptId,
+                            lastVideoTitle = job.title,
+                            finalSceneNarration = finalNarration
+                        )
+                    }
+                }
+
+                OmniWidgetProvider.requestRefresh(this)
+                postNotification("Telegram Upload Complete", tgMessage, 100)
+
+                if (vault.customWebhookUrl.isNotBlank()) {
+                    webhookNotifier.sendEvent(
+                        event = "RENDER_COMPLETED",
+                        title = job.title,
+                        message = "$tgMessage (${elapsedSeconds}s on $activeAccountLabel — phone download skipped to save data)."
+                    )
+                }
+                return
+            }
+
+            // 4b. Enforce Wi-Fi Only Auto-Download rule if enabled in Settings
             if (settingsRepo.current.wifiOnlyAutoDownload && !isOnWifiNetwork()) {
                 throw IllegalStateException(
                     "Render complete on Kaggle, but Wi-Fi Only Auto-Download is enabled. Connect to Wi-Fi and tap Retry."
@@ -282,16 +369,17 @@ class RenderQueueForegroundService : Service() {
             OmniWidgetProvider.requestRefresh(this)
             postNotification("Render Complete", "${job.title} saved offline.", 100)
 
-            // v2.5: Optional Telegram Auto-Archive (<= 49 MB) + Instant Status Alerts & Custom Webhook
+            // v2.5 + v5.2: Optional Phone-side Telegram Auto-Archive (<= 49 MB) only if Kaggle did NOT already upload directly via MTProto
             if (vault.telegramBotToken.isNotBlank() && vault.telegramChatId.isNotBlank()) {
-                if (settingsRepo.current.telegramAutoArchiveVideos &&
+                if (!directTelegramUpload &&
+                    settingsRepo.current.telegramAutoArchiveVideos &&
                     finalLocalFile.length() <= TelegramBackupClient.MAX_TELEGRAM_VIDEO_BYTES
                 ) {
                     telegramClient.uploadRenderedVideoIfEligible(
                         videoFile = finalLocalFile,
                         caption = "OmniAI Render Complete: ${job.title} (${elapsedSeconds}s · $activeAccountLabel)"
                     )
-                } else {
+                } else if (!directTelegramUpload) {
                     telegramClient.sendStatusMessage(
                         "OmniAI Render Complete: ${job.title} saved offline (${downloadedSize / (1024 * 1024)} MB · ${elapsedSeconds}s)."
                     )
@@ -334,6 +422,77 @@ class RenderQueueForegroundService : Service() {
                     message = ex.message ?: "Unknown Kaggle render failure."
                 )
             }
+        }
+    }
+
+    private suspend fun downloadExistingKaggleCopy(jobId: Long) {
+        val renderDao = db.renderJobDao()
+        val downloadDao = db.downloadDao()
+        val job = renderDao.getJobById(jobId) ?: return
+        try {
+            if (settingsRepo.current.wifiOnlyAutoDownload && !isOnWifiNetwork()) {
+                postNotification("Wi-Fi Required", "Connect to Wi-Fi to download copy for ${job.title}.", 0)
+                return
+            }
+            updateProgress(job.id, "DOWNLOADING", 15, "Fetching Kaggle Output copy for phone...")
+            val outputFiles = kaggleClient.listKernelOutputs()
+            val finalArtifact = outputFiles.firstOrNull { it.fileName.endsWith("final_video.mp4") }
+                ?: throw IllegalStateException("final_video.mp4 not found in latest Kaggle kernel output.")
+
+            val targetDir = File(filesDir, "videos").apply { mkdirs() }
+            val safePrefix = job.title.replace(Regex("[^a-zA-Z0-9_-]"), "_").take(28)
+            val finalLocalName = "${safePrefix}_job${job.id}_final.mp4"
+            val finalLocalFile = File(targetDir, finalLocalName)
+
+            val dlRecordId = downloadDao.insert(
+                DownloadRecordEntity(
+                    fileName = finalLocalName,
+                    filePath = finalLocalFile.absolutePath,
+                    sourceUrl = finalArtifact.url,
+                    category = "RENDER",
+                    status = "DOWNLOADING",
+                    progressPercent = 0,
+                    sizeBytes = finalArtifact.totalBytes,
+                    socialMetadataJson = job.socialMetadataJson
+                )
+            )
+            val downloadedSize = kaggleClient.downloadFileWithProgress(
+                downloadUrl = finalArtifact.url,
+                targetFile = finalLocalFile
+            ) { pct, bytes ->
+                serviceScope.launch {
+                    downloadDao.updateProgress(dlRecordId, "DOWNLOADING", pct, bytes)
+                    updateProgress(job.id, "DOWNLOADING", pct.coerceIn(15, 99), "Downloading copy to phone ($pct%)")
+                }
+            }
+            downloadDao.updateProgress(dlRecordId, "COMPLETED", 100, downloadedSize)
+            renderDao.updateStatus(
+                jobId = job.id,
+                status = "COMPLETED",
+                progress = 100,
+                message = "Saved phone copy: $finalLocalName (also sent to Telegram)",
+                outputPath = finalLocalFile.absolutePath
+            )
+            job.scriptId?.let { scriptId ->
+                runCatching {
+                    db.videoScriptDao().markScriptRendered(
+                        scriptId = scriptId,
+                        status = "RENDERED",
+                        videoPath = finalLocalFile.absolutePath
+                    )
+                }
+            }
+            OmniWidgetProvider.requestRefresh(this)
+            postNotification("Phone Copy Saved", "${job.title} downloaded to phone.", 100)
+        } catch (ex: Exception) {
+            renderDao.updateStatus(
+                jobId = job.id,
+                status = "COMPLETED",
+                progress = 100,
+                message = "Video uploaded to Telegram! Phone copy failed: ${ex.message}",
+                outputPath = ""
+            )
+            postNotification("Phone Copy Failed", "${job.title}: ${ex.message}", 0)
         }
     }
 
@@ -389,9 +548,19 @@ class RenderQueueForegroundService : Service() {
     companion object {
         private const val CHANNEL_ID = "omniai_render_queue_channel"
         private const val NOTIFICATION_ID = 4091
+        const val ACTION_DOWNLOAD_COPY = "com.omniai.studio.action.DOWNLOAD_KAGGLE_COPY"
+        const val EXTRA_DOWNLOAD_JOB_ID = "extra_download_job_id"
 
         fun enqueueStart(context: Context) {
             val intent = Intent(context, RenderQueueForegroundService::class.java)
+            context.startForegroundService(intent)
+        }
+
+        fun enqueueDownloadCopy(context: Context, jobId: Long) {
+            val intent = Intent(context, RenderQueueForegroundService::class.java).apply {
+                action = ACTION_DOWNLOAD_COPY
+                putExtra(EXTRA_DOWNLOAD_JOB_ID, jobId)
+            }
             context.startForegroundService(intent)
         }
     }

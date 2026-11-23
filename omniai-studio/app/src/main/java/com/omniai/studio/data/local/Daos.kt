@@ -449,6 +449,9 @@ interface VideoScriptDao {
     @Query("SELECT * FROM video_scripts WHERE id = :scriptId LIMIT 1")
     suspend fun getScriptById(scriptId: Long): VideoScriptEntity?
 
+    @Query("UPDATE video_scripts SET thumbnailPath = :thumbnailPath, updatedAt = :updatedAt WHERE id = :scriptId")
+    suspend fun updateThumbnailPath(scriptId: Long, thumbnailPath: String, updatedAt: Long = System.currentTimeMillis())
+
     @Query(
         """
         SELECT DISTINCT s.* FROM video_scripts s
@@ -791,4 +794,30 @@ interface ProjectDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertCommitLog(log: GitCommitLogEntity): Long
 }
+
+// =========================================================================
+// v5.3 YOUTUBE DATA API v3 QUOTA TRACKING DAO
+// =========================================================================
+
+@Dao
+interface YouTubeQuotaDao {
+    @Query("SELECT COALESCE(SUM(unitsUsed), 0) FROM youtube_quota_logs WHERE dateKey = :dateKey")
+    fun observeUnitsUsedForDate(dateKey: String): Flow<Int>
+
+    @Query("SELECT COALESCE(SUM(unitsUsed), 0) FROM youtube_quota_logs WHERE dateKey = :dateKey")
+    suspend fun getUnitsUsedForDateOnce(dateKey: String): Int
+
+    @Query("SELECT * FROM youtube_quota_logs ORDER BY createdAt DESC LIMIT 30")
+    fun observeRecentLogs(): Flow<List<YouTubeQuotaEntity>>
+
+    @Query("SELECT * FROM youtube_quota_logs ORDER BY createdAt DESC")
+    suspend fun getAllOnce(): List<YouTubeQuotaEntity>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insert(entry: YouTubeQuotaEntity): Long
+
+    @Query("DELETE FROM youtube_quota_logs WHERE createdAt < :cutoffMs")
+    suspend fun pruneOlderThan(cutoffMs: Long)
+}
+
 

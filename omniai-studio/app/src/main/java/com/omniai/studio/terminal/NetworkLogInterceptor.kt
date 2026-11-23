@@ -37,6 +37,7 @@ object NetworkLogInterceptor : Interceptor {
     private const val MAX_RING_BUFFER = 120
     private val sensitiveHeaderNames = setOf(
         "authorization",
+        "apikey",
         "x-api-key",
         "x-goog-api-key",
         "cookie",

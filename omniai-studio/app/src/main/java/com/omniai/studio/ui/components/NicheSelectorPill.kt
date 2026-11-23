@@ -52,6 +52,7 @@ import com.omniai.studio.data.local.CharacterProfileEntity
 import com.omniai.studio.data.local.HashtagPackEntity
 import com.omniai.studio.data.local.NicheEntity
 import com.omniai.studio.data.remote.NicheBlueprintDto
+import com.omniai.studio.data.remote.YouTubeChannelProfile
 import com.omniai.studio.ui.theme.AmoledBorder
 import com.omniai.studio.ui.theme.AmoledSurface
 import com.omniai.studio.ui.theme.EmeraldAccent
@@ -214,7 +215,8 @@ fun NicheEditorDialog(
     onCompressMemoryNow: ((Long) -> Unit)? = null,
     onSave: (NicheEntity) -> Unit,
     onDelete: ((NicheEntity) -> Unit)? = null,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    youtubeProfiles: List<YouTubeChannelProfile> = emptyList()
 ) {
     var name by remember(initialNiche) { mutableStateOf(initialNiche?.name.orEmpty()) }
     var emoji by remember(initialNiche) { mutableStateOf(initialNiche?.emoji ?: "🎬") }
@@ -225,6 +227,7 @@ fun NicheEditorDialog(
     var aspectRatio by remember(initialNiche) { mutableStateOf(initialNiche?.defaultAspectRatio ?: "9:16") }
     var linkedCharacterId by remember(initialNiche) { mutableStateOf(initialNiche?.linkedCharacterId) }
     var linkedHashtagPackId by remember(initialNiche) { mutableStateOf(initialNiche?.linkedHashtagPackId) }
+    var linkedYoutubeProfileId by remember(initialNiche) { mutableStateOf(initialNiche?.linkedYoutubeProfileId.orEmpty()) }
     var autoNextEnabled by remember(initialNiche) { mutableStateOf(initialNiche?.autoNextEnabled ?: false) }
 
     val styleOptions = listOf(
@@ -396,6 +399,27 @@ fun NicheEditorDialog(
                     }
                 }
 
+                if (youtubeProfiles.isNotEmpty()) {
+                    Text("Linked YouTube Channel Profile (Multi-Channel)", style = MaterialTheme.typography.labelMedium, color = TextSecondary)
+                    Row(
+                        modifier = Modifier.horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        FilterChip(
+                            selected = linkedYoutubeProfileId.isBlank(),
+                            onClick = { linkedYoutubeProfileId = "" },
+                            label = { Text("Default Active") }
+                        )
+                        youtubeProfiles.forEach { yt ->
+                            FilterChip(
+                                selected = linkedYoutubeProfileId == yt.id,
+                                onClick = { linkedYoutubeProfileId = yt.id },
+                                label = { Text(yt.label) }
+                            )
+                        }
+                    }
+                }
+
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -450,6 +474,7 @@ fun NicheEditorDialog(
                         defaultAspectRatio = aspectRatio,
                         linkedCharacterId = linkedCharacterId,
                         linkedHashtagPackId = linkedHashtagPackId,
+                        linkedYoutubeProfileId = linkedYoutubeProfileId,
                         autoNextEnabled = autoNextEnabled
                     )
                     onSave(entity)

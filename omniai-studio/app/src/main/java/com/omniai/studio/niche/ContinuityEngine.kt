@@ -10,14 +10,17 @@ import com.omniai.studio.data.remote.OptimizedScenesDto
 import com.omniai.studio.data.remote.ScriptAuditResult
 import com.omniai.studio.data.remote.SeriesPlanDto
 import com.omniai.studio.data.remote.StoryboardScene
+import com.omniai.studio.youtube.YouTubeAnalyticsRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
 /**
- * v4.0 Auto-Next Video Continuity Engine, Series Roadmap Generator & Viral Script Auditor.
+ * v4.0–v5.3 Auto-Next Video Continuity Engine, Series Roadmap Generator & Viral Script Auditor.
  * - Generates 4 non-repeating post-video next-command suggestions (Sequel, Deep Dive, Twist, Chat Spin-off).
+ * - Injects Closed-Loop YouTube Analytics (top 3 & bottom 3 video performance) so Next-Video suggestions
+ *   double down on proven high-retention topics.
  * - Generates 3 context-aware chat follow-up commands (always including 1 "Turn this chat into next video").
  * - Generates ordered 7 / 15 / 30 episode Niche Series Roadmaps.
  * - Audits storyboards pre-render (Hook / Pacing / Visual Clarity / Seamless Loop) and auto-optimizes weak scenes
@@ -27,6 +30,7 @@ class ContinuityEngine(
     private val db: OmniAiDatabase,
     private val aiClient: AiStreamingClient,
     private val nicheContextBuilder: NicheContextBuilder,
+    private val youTubeAnalyticsRepository: YouTubeAnalyticsRepository? = null,
     private val json: Json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
 ) {
 
@@ -79,8 +83,13 @@ class ContinuityEngine(
             }
         """.trimIndent()
 
+        val ytFeedback = youTubeAnalyticsRepository?.buildContinuityFeedbackPrompt().orEmpty()
         val userPrompt = buildString {
             appendLine(compactContext)
+            if (ytFeedback.isNotBlank()) {
+                appendLine()
+                appendLine(ytFeedback)
+            }
             appendLine()
             appendLine("LAST COMPLETED VIDEO: $lastVideoTitle")
             if (finalSceneNarration.isNotBlank()) {
@@ -289,8 +298,13 @@ class ContinuityEngine(
             Generate all $count episodes.
         """.trimIndent()
 
+        val ytFeedback = youTubeAnalyticsRepository?.buildContinuityFeedbackPrompt().orEmpty()
         val userPrompt = buildString {
             appendLine(compactContext)
+            if (ytFeedback.isNotBlank()) {
+                appendLine()
+                appendLine(ytFeedback)
+            }
             if (existingTitles.isNotEmpty()) {
                 appendLine()
                 appendLine("DO NOT DUPLICATE EXISTING VIDEOS:")

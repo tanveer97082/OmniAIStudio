@@ -1,19 +1,27 @@
 #!/usr/bin/env python3
 """
-OmniAI-Studio Dual-GPU Kaggle Video Rendering Worker
-====================================================
+OmniAI-Studio v5.3 Dual-GPU Kaggle Video Rendering Worker
+=========================================================
 Reads `/kaggle/input/video-tasks-input/scenes.json`, generates Edge-TTS voiceovers
 and synchronized `.srt` subtitles per scene, auto-detects dual GPUs (T4 x2) and
 spawns isolated CUDA subprocesses running `Wan-AI/Wan2.1-T2V-1.3B-Diffusers`
 (bfloat16 UNet/Transformer + float32 VAE) in parallel, muxes individual
 `/kaggle/working/scene_X.mp4` clips with optional burned yellow/white bottom-center
 subtitles, subtle bottom-right `watermark_text` drawtext overlay, and optional
-`bgm_url` ducked at 15% volume via FFmpeg `sidechaincompress`, then concatenates
-`/kaggle/working/final_video.mp4`.
+`bgm_url` ducked at 15% volume via FFmpeg `sidechaincompress`, concatenates
+`/kaggle/working/final_video.mp4`, and supports:
+- v5.3 Direct Kaggle-to-YouTube chunked resumable upload (`google-api-python-client`
+  + `google-auth`, reading `YT_CLIENT_ID`, `YT_CLIENT_SECRET`, `YT_REFRESH_TOKEN`
+  from Kaggle Secrets) with custom thumbnail & first comment.
+- v5.3 Optional Meta Graph API Facebook Page Reels (`rupload.facebook.com`) &
+  Instagram Reels upload (`META_PAGE_ID`, `META_IG_USER_ID`, `META_PAGE_ACCESS_TOKEN`).
+- v5.2 Direct Kaggle-to-Telegram 2 GB MTProto upload (including the live YouTube URL
+  inside the completion alert) with automatic HTTP Bot API / 45 MB FFmpeg split fallback.
 """
 
 import argparse
 import asyncio
+import concurrent.futures
 import json
 import math
 import os
@@ -23,7 +31,7 @@ import sys
 import time
 import urllib.request
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Coroutine, Dict, List, Optional, Tuple, TypeVar
 
 INPUT_JSON_PATH = Path("/kaggle/input/video-tasks-input/scenes.json")
 REF_IMAGE_PATH = Path("/kaggle/input/video-tasks-input/ref_image.jpg")
@@ -31,6 +39,7 @@ WORK_DIR = Path("/kaggle/working")
 TEMP_DIR = WORK_DIR / "_tmp_render"
 MODEL_ID = "Wan-AI/Wan2.1-T2V-1.3B-Diffusers"
 I2V_MODEL_ID = "Wan-AI/Wan2.1-I2V-14B-480P-Diffusers"
+HTTP_BOT_MAX_BYTES = 49 * 1024 * 1024  # 49 MB safety threshold for HTTP Bot API
 
 VOICE_MAP = {
     "Hindi Male": "hi-IN-MadhurNeural",
@@ -38,6 +47,56 @@ VOICE_MAP = {
     "English Male": "en-US-AndrewNeural",
     "English Female": "en-US-AvaNeural",
 }
+
+T = TypeVar("T")
+
+
+def run_async(coro: Coroutine[Any, Any, T]) -> T:
+    """
+    Safely execute an asyncio coroutine in both standalone CLI scripts and
+    Kaggle/Jupyter notebooks that already own a running event loop.
+    """
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+
+    try:
+        import nest_asyncio  # type: ignore
+
+        nest_asyncio.apply()
+        loop = asyncio.get_event_loop()
+        return loop.run_until_complete(coro)
+    except Exception:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            return pool.submit(asyncio.run, coro).result()
+
+
+def mask_secrets(text: str, secrets: List[str]) -> str:
+    """Redact any configured secret values before printing exception logs."""
+    sanitized = str(text)
+    for sec in secrets:
+        cleaned = (sec or "").strip()
+        if len(cleaned) >= 4:
+            sanitized = sanitized.replace(cleaned, "[REDACTED]")
+    return sanitized
+
+
+def load_kaggle_secret(secret_name: str) -> str:
+    """
+    Read a secret securely from Kaggle Notebook Add-ons -> Secrets via
+    `kaggle_secrets.UserSecretsClient()`, falling back to environment variables.
+    Never logs secret values.
+    """
+    try:
+        from kaggle_secrets import UserSecretsClient  # type: ignore
+
+        val = UserSecretsClient().get_secret(secret_name)
+        if val is not None and str(val).strip():
+            return str(val).strip()
+    except Exception:
+        pass
+    return os.environ.get(secret_name, "").strip()
 
 
 def ensure_dependencies() -> None:
@@ -49,6 +108,10 @@ def ensure_dependencies() -> None:
         ("accelerate", "accelerate>=1.2.0"),
         ("imageio", "imageio[ffmpeg]>=2.34.0"),
         ("ftfy", "ftfy>=6.2.0"),
+        ("telethon", "telethon>=1.36.0"),
+        ("requests", "requests>=2.31.0"),
+        ("googleapiclient", "google-api-python-client>=2.120.0"),
+        ("google.oauth2", "google-auth>=2.28.0"),
     ]
     missing = []
     for mod, pkg in required:
@@ -62,6 +125,19 @@ def ensure_dependencies() -> None:
             [sys.executable, "-m", "pip", "install", "-q", *missing],
             check=True,
         )
+
+    # Install optional C accelerator `cryptg` for fast 2 GB MTProto encryption
+    try:
+        __import__("cryptg")
+    except ImportError:
+        try:
+            print("[Bootstrap] Installing optional MTProto accelerator: cryptg", flush=True)
+            subprocess.run(
+                [sys.executable, "-m", "pip", "install", "-q", "cryptg"],
+                check=False,
+            )
+        except Exception:
+            pass
 
 
 def format_srt_timestamp(seconds: float) -> str:
@@ -90,6 +166,85 @@ def probe_duration(media_path: Path) -> float:
     return max(1.0, float(res.stdout.strip()))
 
 
+def probe_video_metadata(video_path: Path) -> Tuple[int, int, int]:
+    """Return (width, height, duration_sec) for Telegram DocumentAttributeVideo."""
+    width, height, duration = 480, 832, 5
+    try:
+        cmd = [
+            "ffprobe",
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=width,height:format=duration",
+            "-of",
+            "json",
+            str(video_path),
+        ]
+        res = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        info = json.loads(res.stdout)
+        streams = info.get("streams") or []
+        if streams:
+            width = int(streams[0].get("width") or width)
+            height = int(streams[0].get("height") or height)
+        dur_raw = (info.get("format") or {}).get("duration")
+        if dur_raw is not None:
+            duration = max(1, int(round(float(dur_raw))))
+    except Exception:
+        try:
+            duration = max(1, int(round(probe_duration(video_path))))
+        except Exception:
+            pass
+    return width, height, duration
+
+
+def extract_video_thumbnail(video_path: Path, thumb_path: Path) -> Optional[Path]:
+    """Extract a crisp JPEG thumbnail frame via FFmpeg for Telegram video preview."""
+    try:
+        cmd = [
+            "ffmpeg",
+            "-y",
+            "-ss",
+            "00:00:01",
+            "-i",
+            str(video_path),
+            "-vframes",
+            "1",
+            "-vf",
+            "scale=320:-2",
+            "-q:v",
+            "3",
+            str(thumb_path),
+        ]
+        subprocess.run(cmd, capture_output=True, check=True)
+        if thumb_path.exists() and thumb_path.stat().st_size > 0:
+            return thumb_path
+    except Exception:
+        pass
+    # Fallback to frame 0 for ultra-short clips
+    try:
+        cmd = [
+            "ffmpeg",
+            "-y",
+            "-i",
+            str(video_path),
+            "-vframes",
+            "1",
+            "-vf",
+            "scale=320:-2",
+            "-q:v",
+            "3",
+            str(thumb_path),
+        ]
+        subprocess.run(cmd, capture_output=True, check=True)
+        if thumb_path.exists() and thumb_path.stat().st_size > 0:
+            return thumb_path
+    except Exception:
+        pass
+    return None
+
+
 def download_bgm_if_provided(bgm_url: str, target_dir: Path) -> Optional[Path]:
     """Download optional background music track from HTTPS URL for FFmpeg ducking."""
     cleaned = (bgm_url or "").strip()
@@ -98,7 +253,7 @@ def download_bgm_if_provided(bgm_url: str, target_dir: Path) -> Optional[Path]:
     dest = target_dir / "bgm_track.audio"
     try:
         print(f"[BGM] Downloading background music from {cleaned}...", flush=True)
-        req = urllib.request.Request(cleaned, headers={"User-Agent": "OmniAI-Studio-Worker/2.0"})
+        req = urllib.request.Request(cleaned, headers={"User-Agent": "OmniAI-Studio-Worker/5.2"})
         with urllib.request.urlopen(req, timeout=30) as resp, open(dest, "wb") as out:
             shutil.copyfileobj(resp, out)
         if dest.exists() and dest.stat().st_size > 1024:
@@ -270,9 +425,9 @@ def render_worker_shard(
         output = pipe(**pipe_kwargs)
         frames = output.frames[0]
         if ref_img is not None and len(frames) > 0:
-            # Blend subtle 0.15 color/composition anchor from ref_image on opening frame if PIL frames
             try:
                 from PIL import Image
+
                 first = frames[0]
                 if isinstance(first, Image.Image):
                     frames[0] = Image.blend(first.convert("RGB"), ref_img.convert("RGB"), 0.15)
@@ -334,7 +489,6 @@ def mux_scene_with_audio_and_subtitles(
     vf_chain = ",".join(vf_filters)
 
     if bgm_path is not None and bgm_path.exists():
-        # Mix voiceover (input 1) over looped BGM (input 2) ducked to 15% volume via sidechaincompress
         filter_complex = (
             f"[0:v]{vf_chain}[vout];"
             "[1:a]asplit=2[voice_sc][voice_mix];"
@@ -506,6 +660,549 @@ def concatenate_scenes(
     subprocess.run(cmd, check=True)
 
 
+# =========================================================================
+# v5.2 DIRECT KAGGLE -> TELEGRAM 2 GB MTPROTO UPLOADER + HTTP FALLBACK
+# =========================================================================
+
+def parse_telegram_chat_target(chat_id_raw: str) -> Any:
+    """Convert numeric chat/channel IDs to int for Telethon, keeping @usernames as str."""
+    cleaned = chat_id_raw.strip()
+    if cleaned.lstrip("-").isdigit():
+        return int(cleaned)
+    return cleaned
+
+
+async def upload_videos_via_mtproto(
+    api_id: int,
+    api_hash: str,
+    bot_token: str,
+    chat_id_raw: str,
+    final_video: Path,
+    caption: str,
+    scene_paths: List[Path],
+    upload_individual_scenes: bool,
+) -> str:
+    """
+    Headless MTProto Bot upload via Telethon (supports up to 2 GB per file,
+    NO phone OTP required). Extracts duration/width/height/thumb for native
+    streaming playback inside Telegram.
+    """
+    from telethon import TelegramClient
+    from telethon.tl.types import DocumentAttributeVideo
+
+    session_prefix = str(WORK_DIR / "tg_bot")
+    target = parse_telegram_chat_target(chat_id_raw)
+    client = TelegramClient(session_prefix, api_id, api_hash)
+    await client.start(bot_token=bot_token)
+    try:
+        w, h, dur = probe_video_metadata(final_video)
+        thumb_path = extract_video_thumbnail(final_video, TEMP_DIR / "final_thumb.jpg")
+        size_mb = final_video.stat().st_size / (1024 * 1024)
+        print(
+            f"[Telegram MTProto] Uploading {final_video.name} ({size_mb:.1f} MB, {w}x{h}, {dur}s) directly to Telegram (2 GB limit)...",
+            flush=True,
+        )
+        await client.send_file(
+            entity=target,
+            file=str(final_video),
+            caption=caption[:1024],
+            supports_streaming=True,
+            thumb=str(thumb_path) if thumb_path else None,
+            attributes=[
+                DocumentAttributeVideo(
+                    duration=dur,
+                    w=w,
+                    h=h,
+                    supports_streaming=True,
+                )
+            ],
+        )
+        uploaded_count = 1
+        if upload_individual_scenes:
+            for idx, scene_mp4 in enumerate(scene_paths, start=1):
+                if not scene_mp4.exists():
+                    continue
+                sw, sh, sdur = probe_video_metadata(scene_mp4)
+                sthumb = extract_video_thumbnail(scene_mp4, TEMP_DIR / f"scene_{idx}_thumb.jpg")
+                await client.send_file(
+                    entity=target,
+                    file=str(scene_mp4),
+                    caption=f"Scene {idx}/{len(scene_paths)} · {scene_mp4.name}",
+                    supports_streaming=True,
+                    thumb=str(sthumb) if sthumb else None,
+                    attributes=[
+                        DocumentAttributeVideo(
+                            duration=sdur,
+                            w=sw,
+                            h=sh,
+                            supports_streaming=True,
+                        )
+                    ],
+                )
+                uploaded_count += 1
+        print(
+            f"[Telegram MTProto] Direct upload complete ({uploaded_count} video file(s) delivered).",
+            flush=True,
+        )
+        return f"MTPROTO_2GB_OK ({uploaded_count} files)"
+    finally:
+        await client.disconnect()
+        # Clean up ephemeral session files so they are never exposed in Kaggle Output
+        for sfile in WORK_DIR.glob("tg_bot.session*"):
+            try:
+                sfile.unlink()
+            except Exception:
+                pass
+
+
+def split_video_for_http_fallback(video_path: Path, parts_dir: Path) -> List[Path]:
+    """
+    Split videos larger than 49 MB into <=45 MB numbered MP4 parts using
+    stream-copy (`ffmpeg -fs 45M -c copy`) so zero renders are lost when
+    TG_API_ID / TG_API_HASH are not configured.
+    """
+    parts_dir.mkdir(parents=True, exist_ok=True)
+    total_dur = probe_duration(video_path)
+    parts: List[Path] = []
+    offset_sec = 0.0
+    part_idx = 1
+
+    while offset_sec < total_dur - 0.35 and part_idx <= 50:
+        out_part = parts_dir / f"{video_path.stem}_part{part_idx}.mp4"
+        cmd = [
+            "ffmpeg",
+            "-y",
+            "-ss",
+            f"{offset_sec:.3f}",
+            "-i",
+            str(video_path),
+            "-fs",
+            "45M",
+            "-c",
+            "copy",
+            "-movflags",
+            "+faststart",
+            str(out_part),
+        ]
+        subprocess.run(cmd, capture_output=True, check=True)
+        if not out_part.exists() or out_part.stat().st_size < 1024:
+            break
+        part_dur = probe_duration(out_part)
+        parts.append(out_part)
+        if part_dur <= 0.25:
+            break
+        offset_sec += part_dur
+        part_idx += 1
+
+    return parts
+
+
+def upload_single_video_http(
+    bot_token: str,
+    chat_id: str,
+    video_path: Path,
+    caption: str,
+    secrets_to_mask: List[str],
+) -> None:
+    import requests
+
+    url = f"https://api.telegram.org/bot{bot_token}/sendVideo"
+    with open(video_path, "rb") as fh:
+        resp = requests.post(
+            url,
+            data={
+                "chat_id": chat_id,
+                "caption": caption[:1024],
+                "supports_streaming": "true",
+            },
+            files={"video": (video_path.name, fh, "video/mp4")},
+            timeout=180,
+        )
+    if not resp.ok:
+        raise RuntimeError(
+            mask_secrets(
+                f"HTTP Bot API sendVideo failed (HTTP {resp.status_code}): {resp.text[:180]}",
+                secrets_to_mask,
+            )
+        )
+
+
+def upload_videos_via_http_fallback(
+    bot_token: str,
+    chat_id: str,
+    final_video: Path,
+    caption: str,
+    scene_paths: List[Path],
+    upload_individual_scenes: bool,
+    secrets_to_mask: List[str],
+) -> str:
+    """Automatic fallback when TG_API_ID / TG_API_HASH are omitted."""
+    file_size = final_video.stat().st_size
+    if file_size <= HTTP_BOT_MAX_BYTES:
+        print(
+            f"[Telegram HTTP Fallback] Uploading {final_video.name} ({file_size / (1024 * 1024):.1f} MB <= 49 MB)...",
+            flush=True,
+        )
+        upload_single_video_http(bot_token, chat_id, final_video, caption, secrets_to_mask)
+        status = "HTTP_BOT_SINGLE_OK"
+    else:
+        print(
+            f"[Telegram HTTP Fallback] {final_video.name} is {file_size / (1024 * 1024):.1f} MB (>49 MB) and TG_API_ID/TG_API_HASH not set. Splitting via ffmpeg -fs 45M -c copy...",
+            flush=True,
+        )
+        parts = split_video_for_http_fallback(final_video, TEMP_DIR / "tg_split_parts")
+        total_parts = len(parts)
+        for idx, part_file in enumerate(parts, start=1):
+            part_caption = f"Part {idx}/{total_parts} · {caption}"
+            print(f"[Telegram HTTP Fallback] Sending Part {idx}/{total_parts} ({part_file.name})...", flush=True)
+            upload_single_video_http(bot_token, chat_id, part_file, part_caption, secrets_to_mask)
+        status = f"HTTP_BOT_SPLIT_OK ({total_parts} parts)"
+
+    if upload_individual_scenes:
+        for idx, scene_mp4 in enumerate(scene_paths, start=1):
+            if scene_mp4.exists() and scene_mp4.stat().st_size <= HTTP_BOT_MAX_BYTES:
+                upload_single_video_http(
+                    bot_token,
+                    chat_id,
+                    scene_mp4,
+                    f"Scene {idx}/{len(scene_paths)} · {scene_mp4.name}",
+                    secrets_to_mask,
+                )
+    return status
+
+
+def perform_direct_telegram_upload(
+    final_video: Path,
+    scene_paths: List[Path],
+    caption: str,
+    upload_individual_scenes: bool,
+) -> str:
+    """
+    Orchestrate Direct Kaggle -> Telegram upload using Kaggle Secrets:
+    1) Primary Mode: Telethon MTProto (up to 2 GB) when TG_API_ID + TG_API_HASH + TG_BOT_TOKEN + TG_CHAT_ID are set.
+    2) Automatic Fallback: HTTP Bot API (<=49 MB) or ffmpeg -fs 45M -c copy split parts (>49 MB).
+    Never prints secrets and never crashes the Kaggle Output preservation step.
+    """
+    bot_token = load_kaggle_secret("TG_BOT_TOKEN")
+    chat_id = load_kaggle_secret("TG_CHAT_ID")
+    api_id_raw = load_kaggle_secret("TG_API_ID")
+    api_hash = load_kaggle_secret("TG_API_HASH")
+    secrets_to_mask = [bot_token, chat_id, api_id_raw, api_hash]
+
+    if not bot_token or not chat_id:
+        print(
+            "[Telegram] direct_telegram_upload=true, but TG_BOT_TOKEN or TG_CHAT_ID secret is missing in Kaggle Secrets. Skipping Telegram upload (final_video.mp4 preserved in Kaggle Output).",
+            flush=True,
+        )
+        return "SKIPPED_MISSING_SECRETS"
+
+    has_mtproto = api_id_raw.isdigit() and bool(api_hash)
+    if has_mtproto:
+        try:
+            return run_async(
+                upload_videos_via_mtproto(
+                    api_id=int(api_id_raw),
+                    api_hash=api_hash,
+                    bot_token=bot_token,
+                    chat_id_raw=chat_id,
+                    final_video=final_video,
+                    caption=caption,
+                    scene_paths=scene_paths,
+                    upload_individual_scenes=upload_individual_scenes,
+                )
+            )
+        except Exception as exc:
+            print(
+                f"[Telegram MTProto] Warning: MTProto upload encountered an error ({mask_secrets(str(exc), secrets_to_mask)}); attempting automatic HTTP fallback...",
+                flush=True,
+            )
+
+    try:
+        return upload_videos_via_http_fallback(
+            bot_token=bot_token,
+            chat_id=chat_id,
+            final_video=final_video,
+            caption=caption,
+            scene_paths=scene_paths,
+            upload_individual_scenes=upload_individual_scenes,
+            secrets_to_mask=secrets_to_mask,
+        )
+    except Exception as exc:
+        print(
+            f"[Telegram] Error: direct upload failed ({mask_secrets(str(exc), secrets_to_mask)}). final_video.mp4 remains saved in Kaggle Output.",
+            flush=True,
+        )
+        return "UPLOAD_FAILED_OUTPUT_KEPT"
+
+
+# =========================================================================
+# v5.3 DIRECT KAGGLE -> YOUTUBE DATA API v3 RESUMABLE UPLOADER
+# =========================================================================
+
+def perform_direct_youtube_upload(
+    final_video: Path,
+    thumb_path: Optional[Path],
+    youtube_metadata: Dict[str, Any],
+    fallback_title: str,
+) -> Tuple[str, str]:
+    """
+    Reconstruct OAuth2 credentials from Kaggle Secrets (`YT_CLIENT_ID`, `YT_CLIENT_SECRET`,
+    `YT_REFRESH_TOKEN`), execute a 5 MB chunked resumable upload to YouTube Data API v3,
+    attach custom thumbnail `thumb.jpg`, and optionally post the first comment.
+    Returns (status_label, watch_url_or_empty). Never logs raw tokens.
+    """
+    yt_client_id = load_kaggle_secret("YT_CLIENT_ID")
+    yt_client_secret = load_kaggle_secret("YT_CLIENT_SECRET")
+    yt_refresh_token = load_kaggle_secret("YT_REFRESH_TOKEN")
+    secrets_to_mask = [yt_client_id, yt_client_secret, yt_refresh_token]
+
+    if not yt_client_id or not yt_client_secret or not yt_refresh_token:
+        print(
+            "[YouTube] direct_youtube_upload=true, but YT_CLIENT_ID / YT_CLIENT_SECRET / YT_REFRESH_TOKEN missing in Kaggle Secrets. Skipping YouTube upload.",
+            flush=True,
+        )
+        return ("SKIPPED_MISSING_SECRETS", "")
+
+    try:
+        from google.auth.transport.requests import Request as GoogleAuthRequest
+        from google.oauth2.credentials import Credentials
+        from googleapiclient.discovery import build
+        from googleapiclient.http import MediaFileUpload
+
+        creds = Credentials(
+            token=None,
+            refresh_token=yt_refresh_token,
+            token_uri="https://oauth2.googleapis.com/token",
+            client_id=yt_client_id,
+            client_secret=yt_client_secret,
+            scopes=[
+                "https://www.googleapis.com/auth/youtube.upload",
+                "https://www.googleapis.com/auth/youtube.force-ssl",
+            ],
+        )
+        creds.refresh(GoogleAuthRequest())
+        youtube = build("youtube", "v3", credentials=creds, cache_discovery=False)
+
+        meta = youtube_metadata or {}
+        title = str(meta.get("title") or fallback_title or "OmniAI Studio Video").strip()[:100]
+        description = str(meta.get("description") or "").strip()[:4950]
+        raw_tags = meta.get("tags") or []
+        tags = [str(t).strip().lstrip("#") for t in raw_tags if str(t).strip()][:30]
+        category_id = str(meta.get("category_id") or "22").strip() or "22"
+        publish_at = str(meta.get("publish_at") or "").strip()
+        privacy = str(meta.get("privacy_status") or "private").strip().lower()
+        if publish_at:
+            privacy = "private"
+        elif privacy not in ("private", "unlisted", "public"):
+            privacy = "private"
+        first_comment = str(meta.get("first_comment") or "").strip()
+
+        status_body: Dict[str, Any] = {
+            "privacyStatus": privacy,
+            "selfDeclaredMadeForKids": False,
+        }
+        if publish_at:
+            status_body["publishAt"] = publish_at
+
+        body = {
+            "snippet": {
+                "title": title,
+                "description": description,
+                "tags": tags,
+                "categoryId": category_id,
+            },
+            "status": status_body,
+        }
+
+        media = MediaFileUpload(
+            str(final_video),
+            mimetype="video/mp4",
+            chunksize=5 * 1024 * 1024,  # 5 MB resumable chunks
+            resumable=True,
+        )
+        print(
+            f"[YouTube] Starting chunked resumable upload for '{title}' (privacy={privacy})...",
+            flush=True,
+        )
+        request = youtube.videos().insert(
+            part="snippet,status",
+            body=body,
+            media_body=media,
+        )
+
+        response = None
+        while response is None:
+            status, response = request.next_chunk()
+            if status is not None:
+                pct = int(status.progress() * 100)
+                print(f"[YouTube] Upload progress: {pct}%", flush=True)
+
+        video_id = str((response or {}).get("id") or "").strip()
+        if not video_id:
+            return ("UPLOAD_FAILED_NO_ID", "")
+
+        watch_url = f"https://youtu.be/{video_id}"
+        print(f"[YouTube] Video uploaded successfully: {watch_url}", flush=True)
+
+        if thumb_path is not None and thumb_path.exists() and thumb_path.stat().st_size > 0:
+            try:
+                youtube.thumbnails().set(
+                    videoId=video_id,
+                    media_body=MediaFileUpload(str(thumb_path), mimetype="image/jpeg"),
+                ).execute()
+                print(f"[YouTube] Custom thumbnail attached to {video_id}.", flush=True)
+            except Exception as thumb_exc:
+                print(
+                    f"[YouTube] Warning: thumbnail upload skipped ({mask_secrets(str(thumb_exc), secrets_to_mask)})",
+                    flush=True,
+                )
+
+        if first_comment:
+            try:
+                youtube.commentThreads().insert(
+                    part="snippet",
+                    body={
+                        "snippet": {
+                            "videoId": video_id,
+                            "topLevelComment": {
+                                "snippet": {
+                                    "textOriginal": first_comment[:2000],
+                                }
+                            },
+                        }
+                    },
+                ).execute()
+                print(f"[YouTube] First comment posted on {video_id}.", flush=True)
+            except Exception as cmt_exc:
+                print(
+                    f"[YouTube] Warning: first comment skipped ({mask_secrets(str(cmt_exc), secrets_to_mask)})",
+                    flush=True,
+                )
+
+        return (f"YOUTUBE_OK ({video_id})", watch_url)
+    except Exception as exc:
+        print(
+            f"[YouTube] Error: direct YouTube upload failed ({mask_secrets(str(exc), secrets_to_mask)}). final_video.mp4 preserved in Kaggle Output.",
+            flush=True,
+        )
+        return ("YOUTUBE_UPLOAD_FAILED", "")
+
+
+# =========================================================================
+# v5.3 OPTIONAL META GRAPH API REELS UPLOADER (FACEBOOK PAGE & INSTAGRAM)
+# =========================================================================
+
+def perform_direct_meta_reels_upload(
+    final_video: Path,
+    description: str,
+    public_video_url: str = "",
+) -> str:
+    """
+    Uploads `final_video.mp4` to Facebook Page Reels via 3-phase Graph API
+    (`POST /{page_id}/video_reels` -> `rupload.facebook.com` -> finish) and
+    optionally creates/publishes an Instagram Reel container if `public_video_url`
+    is provided. Reads `META_PAGE_ID`, `META_IG_USER_ID`, and `META_PAGE_ACCESS_TOKEN`
+    from Kaggle Secrets and masks tokens in all logs.
+    """
+    import requests
+
+    page_id = load_kaggle_secret("META_PAGE_ID")
+    ig_user_id = load_kaggle_secret("META_IG_USER_ID")
+    access_token = load_kaggle_secret("META_PAGE_ACCESS_TOKEN")
+    secrets_to_mask = [access_token]
+
+    if not access_token or (not page_id and not ig_user_id):
+        print(
+            "[Meta Reels] direct_fb_ig_upload=true, but META_PAGE_ACCESS_TOKEN / META_PAGE_ID missing in Kaggle Secrets. Skipping.",
+            flush=True,
+        )
+        return "SKIPPED_MISSING_SECRETS"
+
+    statuses: List[str] = []
+    graph_base = "https://graph.facebook.com/v19.0"
+
+    if page_id:
+        try:
+            start_resp = requests.post(
+                f"{graph_base}/{page_id}/video_reels",
+                data={"upload_phase": "start", "access_token": access_token},
+                timeout=60,
+            )
+            start_resp.raise_for_status()
+            start_json = start_resp.json()
+            fb_video_id = str(start_json.get("video_id") or "")
+            upload_url = str(
+                start_json.get("upload_url")
+                or f"https://rupload.facebook.com/video-upload/v19.0/{fb_video_id}"
+            )
+            file_size = final_video.stat().st_size
+            with open(final_video, "rb") as fh:
+                up_resp = requests.post(
+                    upload_url,
+                    headers={
+                        "Authorization": f"OAuth {access_token}",
+                        "offset": "0",
+                        "file_size": str(file_size),
+                    },
+                    data=fh,
+                    timeout=300,
+                )
+            up_resp.raise_for_status()
+
+            finish_resp = requests.post(
+                f"{graph_base}/{page_id}/video_reels",
+                data={
+                    "upload_phase": "finish",
+                    "video_id": fb_video_id,
+                    "video_state": "PUBLISHED",
+                    "description": description[:2200],
+                    "access_token": access_token,
+                },
+                timeout=60,
+            )
+            finish_resp.raise_for_status()
+            statuses.append(f"FB_REEL_OK({fb_video_id})")
+            print(f"[Meta Reels] Published Facebook Page Reel: {fb_video_id}", flush=True)
+        except Exception as exc:
+            print(
+                f"[Meta Reels] Facebook Page Reel upload failed ({mask_secrets(str(exc), secrets_to_mask)})",
+                flush=True,
+            )
+            statuses.append("FB_REEL_FAILED")
+
+    if ig_user_id and public_video_url.strip():
+        try:
+            c_resp = requests.post(
+                f"{graph_base}/{ig_user_id}/media",
+                data={
+                    "media_type": "REELS",
+                    "video_url": public_video_url.strip(),
+                    "caption": description[:2200],
+                    "access_token": access_token,
+                },
+                timeout=60,
+            )
+            c_resp.raise_for_status()
+            creation_id = str(c_resp.json().get("id") or "")
+            p_resp = requests.post(
+                f"{graph_base}/{ig_user_id}/media_publish",
+                data={"creation_id": creation_id, "access_token": access_token},
+                timeout=60,
+            )
+            p_resp.raise_for_status()
+            ig_media_id = str(p_resp.json().get("id") or creation_id)
+            statuses.append(f"IG_REEL_OK({ig_media_id})")
+            print(f"[Meta Reels] Published Instagram Reel: {ig_media_id}", flush=True)
+        except Exception as exc:
+            print(
+                f"[Meta Reels] Instagram Reel upload failed ({mask_secrets(str(exc), secrets_to_mask)})",
+                flush=True,
+            )
+            statuses.append("IG_REEL_FAILED")
+
+    return " | ".join(statuses) if statuses else "SKIPPED"
+
+
 def run_orchestrator() -> None:
     ensure_dependencies()
     import torch
@@ -524,6 +1221,20 @@ def run_orchestrator() -> None:
     use_ref_image = bool(payload.get("use_ref_image", False)) and REF_IMAGE_PATH.exists()
     seamless_loop = bool(payload.get("seamless_loop", False))
     custom_negative_prompt = str(payload.get("negative_prompt", "") or "")
+    direct_telegram_upload = bool(payload.get("direct_telegram_upload", False))
+    upload_individual_scenes = bool(payload.get("upload_individual_scenes", False))
+    direct_youtube_upload = bool(payload.get("direct_youtube_upload", False))
+    youtube_metadata = payload.get("youtube_metadata") or {}
+    direct_fb_ig_upload = bool(payload.get("direct_fb_ig_upload", False))
+    public_video_url = str(payload.get("public_video_url", "") or "").strip()
+    telegram_caption = str(payload.get("telegram_caption", "") or "").strip()
+    if not telegram_caption:
+        social = payload.get("social_metadata") or {}
+        viral_title = str(social.get("viralTitle") or title).strip()
+        tags = social.get("hashtags") or []
+        tag_str = " ".join(str(t) for t in tags if str(t).strip())
+        telegram_caption = f"{viral_title}\n{tag_str}".strip()
+
     scenes = payload.get("scenes", [])
     if not scenes:
         raise ValueError("scenes.json contains an empty 'scenes' array.")
@@ -533,7 +1244,7 @@ def run_orchestrator() -> None:
     TEMP_DIR.mkdir(parents=True, exist_ok=True)
 
     print(
-        f"[Orchestrator] Starting job '{title}' | scenes={len(scenes)} | aspect={aspect_ratio} | voice={voice} | speed={speed_factor}x | ref_image={use_ref_image} | seamless_loop={seamless_loop} | burn_subtitles={burn_subtitles}",
+        f"[Orchestrator] Starting job '{title}' | scenes={len(scenes)} | aspect={aspect_ratio} | voice={voice} | speed={speed_factor}x | ref_image={use_ref_image} | seamless_loop={seamless_loop} | direct_tg={direct_telegram_upload} | direct_yt={direct_youtube_upload} | direct_meta={direct_fb_ig_upload}",
         flush=True,
     )
 
@@ -548,7 +1259,7 @@ def run_orchestrator() -> None:
         srt_path = TEMP_DIR / f"scene_{idx}.srt"
         raw_video_path = TEMP_DIR / f"scene_{idx}_raw.mp4"
 
-        duration = asyncio.run(
+        duration = run_async(
             synthesize_voice_and_srt(narration, voice, audio_path, srt_path, speed_factor=speed_factor)
         )
         prepared_scenes.append(
@@ -628,9 +1339,46 @@ def run_orchestrator() -> None:
         final_scene_mp4s.append(out_mp4)
         print(f"[Mux] Exported {out_mp4.name}", flush=True)
 
-    # Step 4: Concatenate into final_video.mp4 (with optional 0.25s seamless_loop trim)
+    # Step 4: Concatenate into final_video.mp4 (always preserved in Kaggle Output)
     final_video = WORK_DIR / "final_video.mp4"
     concatenate_scenes(final_scene_mp4s, final_video, seamless_loop=seamless_loop)
+    generated_thumb = extract_video_thumbnail(final_video, WORK_DIR / "thumb.jpg")
+
+    # Step 5: Optional v5.3 Direct Kaggle -> YouTube Data API v3 Resumable Upload
+    youtube_upload_status = "DISABLED"
+    youtube_watch_url = ""
+    if direct_youtube_upload:
+        youtube_upload_status, youtube_watch_url = perform_direct_youtube_upload(
+            final_video=final_video,
+            thumb_path=generated_thumb,
+            youtube_metadata=youtube_metadata,
+            fallback_title=title,
+        )
+
+    # Step 6: Optional v5.3 Direct Kaggle -> Meta FB/IG Reels Graph API Upload
+    meta_reels_status = "DISABLED"
+    if direct_fb_ig_upload:
+        meta_caption = str(youtube_metadata.get("description") or telegram_caption or title)
+        meta_reels_status = perform_direct_meta_reels_upload(
+            final_video=final_video,
+            description=meta_caption,
+            public_video_url=public_video_url,
+        )
+
+    # Step 7: Optional v5.2 Direct Kaggle -> Telegram 2 GB MTProto Upload (with YouTube URL included)
+    telegram_upload_status = "DISABLED"
+    if direct_telegram_upload:
+        enriched_caption = telegram_caption
+        if youtube_watch_url:
+            enriched_caption = f"{enriched_caption}\nYouTube: {youtube_watch_url}".strip()
+        if meta_reels_status not in ("DISABLED", "SKIPPED", "SKIPPED_MISSING_SECRETS"):
+            enriched_caption = f"{enriched_caption}\nMeta Reels: {meta_reels_status}".strip()
+        telegram_upload_status = perform_direct_telegram_upload(
+            final_video=final_video,
+            scene_paths=final_scene_mp4s,
+            caption=enriched_caption,
+            upload_individual_scenes=upload_individual_scenes,
+        )
 
     manifest = {
         "title": title,
@@ -642,7 +1390,16 @@ def run_orchestrator() -> None:
         "burn_subtitles": burn_subtitles,
         "watermark_text": watermark_text,
         "bgm_applied": bgm_path is not None,
+        "direct_telegram_upload": direct_telegram_upload,
+        "upload_individual_scenes": upload_individual_scenes,
+        "telegram_upload_status": telegram_upload_status,
+        "direct_youtube_upload": direct_youtube_upload,
+        "youtube_upload_status": youtube_upload_status,
+        "youtube_watch_url": youtube_watch_url,
+        "direct_fb_ig_upload": direct_fb_ig_upload,
+        "meta_reels_status": meta_reels_status,
         "final_video": final_video.name,
+        "thumbnail_file": generated_thumb.name if generated_thumb else "",
         "scene_files": [p.name for p in final_scene_mp4s],
         "completed_at_epoch": int(time.time()),
     }
@@ -650,11 +1407,14 @@ def run_orchestrator() -> None:
         json.dumps(manifest, indent=2), encoding="utf-8"
     )
     shutil.rmtree(TEMP_DIR, ignore_errors=True)
-    print(f"[Orchestrator] Render complete: {final_video} + {len(final_scene_mp4s)} individual scene clips.", flush=True)
+    print(
+        f"[Orchestrator] Render complete: {final_video} + {len(final_scene_mp4s)} scenes | youtube={youtube_upload_status} | meta={meta_reels_status} | telegram={telegram_upload_status}.",
+        flush=True,
+    )
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="OmniAI-Studio v2.0 Dual-GPU Wan 2.1 Worker")
+    parser = argparse.ArgumentParser(description="OmniAI-Studio v5.3 Dual-GPU Wan 2.1 Worker")
     parser.add_argument("--worker-gpu", type=int, default=None, help="Isolated CUDA worker index")
     parser.add_argument("--shard-file", type=str, default=None, help="JSON shard path for worker subprocess")
     parser.add_argument("--aspect-ratio", type=str, default="9:16", help="Target video aspect ratio")

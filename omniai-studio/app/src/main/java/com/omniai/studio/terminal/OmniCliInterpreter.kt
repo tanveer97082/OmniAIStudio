@@ -10,21 +10,34 @@ import com.omniai.studio.BuildConfig
 import com.omniai.studio.backup.BackupSelectionOptions
 import com.omniai.studio.backup.GitHubBackupSync
 import com.omniai.studio.backup.VaultBackupManager
+import com.omniai.studio.cloud.CloudSyncRepository
+import com.omniai.studio.cloud.SupabaseAuthManager
 import com.omniai.studio.data.local.AppSettingsRepository
 import com.omniai.studio.data.local.ContentDbExporter
 import com.omniai.studio.data.local.OmniAiDatabase
 import com.omniai.studio.data.remote.AiStreamingClient
+import com.omniai.studio.data.remote.ApiKeyPoolManager
 import com.omniai.studio.data.remote.HfModelExplorerClient
 import com.omniai.studio.data.remote.KaggleApiClient
 import com.omniai.studio.data.remote.OpenAiChatMessage
+import com.omniai.studio.git.AiBuildDoctor
 import com.omniai.studio.git.GitHubGitEngine
+import com.omniai.studio.git.SecretLeakScanner
+import com.omniai.studio.lan.LocalLanWebServer
 import com.omniai.studio.niche.ContinuityEngine
+import com.omniai.studio.security.DeviceHealthGuard
 import com.omniai.studio.security.VaultManager
+import com.omniai.studio.data.remote.YouTubeUploadRequest
+import com.omniai.studio.worker.OutboxFlushWorker
+import com.omniai.studio.youtube.PolicyComplianceScanner
+import com.omniai.studio.youtube.YouTubeAnalyticsRepository
+import com.omniai.studio.youtube.YouTubeApiClient
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import java.io.File
 import java.util.Locale
 import java.util.concurrent.TimeUnit
 
@@ -34,12 +47,8 @@ enum class OmniCliOutcome {
 }
 
 /**
- * Built-in OmniCLI Command Dispatcher intercepting high-value developer, studio, DB, Niche & Git commands:
- * `help`, `proj list`, `proj switch <slug>`, `git status`, `git push "<msg>"`, `git pull`, `git actions`,
- * `niche list`, `niche switch <name>`, `next video`, `ai <prompt>`, `kaggle status`,
- * `hf search <query>`, `curl <url>`, `backup now`, `sysinfo`, `netlog`,
- * `db stats`, `db search <query>`, `db export csv`, and `clear`.
- * Any unrecognized command falls through to LocalShellExecutor or TermuxBridge.
+ * Built-in OmniCLI Command Dispatcher intercepting high-value developer, studio, DB, Niche,
+ * Resilience, Cloud & Git commands. Any unrecognized command falls through to LocalShellExecutor or TermuxBridge.
  */
 class OmniCliInterpreter(
     private val context: Context,
@@ -55,7 +64,15 @@ class OmniCliInterpreter(
     private val hfClient: HfModelExplorerClient,
     private val vault: VaultManager,
     private val vaultBackupManager: VaultBackupManager,
-    private val githubBackupSync: GitHubBackupSync
+    private val githubBackupSync: GitHubBackupSync,
+    private val youTubeApiClient: YouTubeApiClient,
+    private val youTubeAnalyticsRepository: YouTubeAnalyticsRepository,
+    private val supabaseAuthManager: SupabaseAuthManager,
+    private val cloudSyncRepository: CloudSyncRepository,
+    private val deviceHealthGuard: DeviceHealthGuard,
+    private val localLanWebServer: LocalLanWebServer,
+    private val aiBuildDoctor: AiBuildDoctor,
+    private val apiKeyPoolManager: ApiKeyPoolManager
 ) {
 
     private val curlClient: OkHttpClient = OkHttpClient.Builder()
@@ -177,6 +194,89 @@ class OmniCliInterpreter(
                 runCurl(target, onLine)
                 return OmniCliOutcome.HANDLED
             }
+            lower == "yt stats" -> {
+                runYtStats(onLine)
+                return OmniCliOutcome.HANDLED
+            }
+            lower.startsWith("yt upload ") -> {
+                val arg = trimmed.substring(10).trim()
+                runYtUpload(arg, onLine)
+                return OmniCliOutcome.HANDLED
+            }
+            lower.startsWith("yt comments ") -> {
+                val arg = trimmed.substring(12).trim()
+                runYtComments(arg, onLine)
+                return OmniCliOutcome.HANDLED
+            }
+            lower == "cloud status" -> {
+                runCloudStatus(onLine)
+                return OmniCliOutcome.HANDLED
+            }
+            lower == "cloud sync" -> {
+                runCloudSync(onLine)
+                return OmniCliOutcome.HANDLED
+            }
+            lower == "cloud users" -> {
+                runCloudUsers(onLine)
+                return OmniCliOutcome.HANDLED
+            }
+            lower == "health" -> {
+                runDeviceHealth(onLine)
+                return OmniCliOutcome.HANDLED
+            }
+            lower == "lan start" -> {
+                val st = localLanWebServer.start()
+                if (st.isRunning) {
+                    onLine("LAN Web Studio LIVE -> ${st.url} | 6-Digit PIN: ${st.accessPin}", TerminalLineType.SUCCESS)
+                } else {
+                    onLine("LAN Web Studio failed: ${st.lastError}", TerminalLineType.STDERR)
+                }
+                return OmniCliOutcome.HANDLED
+            }
+            lower == "lan stop" -> {
+                localLanWebServer.stop()
+                onLine("LAN Web Studio stopped.", TerminalLineType.SYSTEM)
+                return OmniCliOutcome.HANDLED
+            }
+            lower == "lan status" -> {
+                val st = localLanWebServer.state.value
+                if (st.isRunning) {
+                    onLine("LAN Web Studio: RUNNING at ${st.url} | PIN=${st.accessPin} | Requests=${st.servedRequests}", TerminalLineType.SUCCESS)
+                } else {
+                    onLine("LAN Web Studio: STOPPED (run 'lan start' to launch)", TerminalLineType.SYSTEM)
+                }
+                return OmniCliOutcome.HANDLED
+            }
+            lower == "scan secrets" -> {
+                runScanSecrets(onLine)
+                return OmniCliOutcome.HANDLED
+            }
+            lower == "doctor" -> {
+                runBuildDoctor(onLine)
+                return OmniCliOutcome.HANDLED
+            }
+            lower == "keys pool" -> {
+                runKeysPoolStatus(onLine)
+                return OmniCliOutcome.HANDLED
+            }
+            lower.startsWith("yt compliance ") -> {
+                val sampleTitle = trimmed.substring(14).trim()
+                val report = PolicyComplianceScanner.scan(
+                    title = sampleTitle,
+                    description = "",
+                    tags = emptyList()
+                )
+                onLine("Compliance Score: ${report.score}/100 (${if (report.passed) "PASS" else "BLOCKED"}) — ${report.summary}", if (report.passed) TerminalLineType.SUCCESS else TerminalLineType.STDERR)
+                report.issues.forEach { issue ->
+                    onLine("  [${issue.severity.label}] ${issue.title} -> ${issue.recommendation}", TerminalLineType.STDOUT)
+                }
+                return OmniCliOutcome.HANDLED
+            }
+            lower == "outbox flush" -> {
+                OutboxFlushWorker.scheduleOnReconnect(context)
+                onLine("Queued OutboxFlushWorker for immediate/on-reconnect flush.", TerminalLineType.SUCCESS)
+                return OmniCliOutcome.HANDLED
+            }
         }
 
         // Fall through to Termux Bridge or Native Local Sandbox Shell
@@ -208,9 +308,22 @@ class OmniCliInterpreter(
         onLine("  niche list           List all configured Niches & active selection", TerminalLineType.STDOUT)
         onLine("  niche switch <name>  Switch active Niche context by name match", TerminalLineType.STDOUT)
         onLine("  next video           Generate/fetch top Auto-Next video command & copy to clipboard", TerminalLineType.STDOUT)
-        onLine("  db stats             Live row counts for Room DB v9 tables", TerminalLineType.STDOUT)
+        onLine("  db stats             Live row counts for Room DB v10 tables & YT quota", TerminalLineType.STDOUT)
         onLine("  db search <query>    Full-text search across Chats, Video Scripts/Scenes & Social SEO", TerminalLineType.STDOUT)
         onLine("  db export csv        Export Scripts + YT/IG/FB SEO to RFC-4180 CSV file", TerminalLineType.STDOUT)
+        onLine("  yt stats             Live YouTube subscribers, recent video views & daily API quota", TerminalLineType.STDOUT)
+        onLine("  yt upload <scriptId> Resumable YouTube upload of linked MP4 + SEO metadata", TerminalLineType.STDOUT)
+        onLine("  yt comments <vidId>  List latest viewer comments on a YouTube video", TerminalLineType.STDOUT)
+        onLine("  cloud status         Show Google OAuth email, active RBAC role, last sync & GZIP savings", TerminalLineType.STDOUT)
+        onLine("  cloud sync           Run two-way GZIP-compressed text delta sync with Supabase", TerminalLineType.STDOUT)
+        onLine("  cloud users          (OWNER only) List registered accounts, devices & RBAC roles", TerminalLineType.STDOUT)
+        onLine("  health               Check device thermal status, battery, RAM & free storage guard", TerminalLineType.STDOUT)
+        onLine("  lan start|stop|status Control zero-dep Local Wi-Fi Web Studio (6-digit PIN)", TerminalLineType.STDOUT)
+        onLine("  scan secrets         Run SecretLeakScanner across active project workspace", TerminalLineType.STDOUT)
+        onLine("  doctor               Run AI Build Doctor on latest failed GitHub Actions run", TerminalLineType.STDOUT)
+        onLine("  keys pool            Inspect Multi-Key API Pool healthy vs cooling-down slots", TerminalLineType.STDOUT)
+        onLine("  yt compliance <title> Offline pre-upload YouTube/Meta policy compliance check", TerminalLineType.STDOUT)
+        onLine("  outbox flush         Schedule WorkManager outbox flush on network reconnect", TerminalLineType.STDOUT)
         onLine("  ai <prompt>          Stream an instant AI response directly inside terminal", TerminalLineType.STDOUT)
         onLine("  kaggle status        Poll active Dual-GPU Wan 2.1 Kaggle kernel status", TerminalLineType.STDOUT)
         onLine("  hf search <query>    Query Hugging Face Hub models sorted by downloads", TerminalLineType.STDOUT)
@@ -479,8 +592,9 @@ class OmniCliInterpreter(
             val projects = db.projectDao().countProjects()
             val projectTasks = db.projectDao().countTasks()
             val commitLogs = db.projectDao().countCommitLogs()
+            val ytQuotaToday = youTubeAnalyticsRepository.getTodayQuotaUnitsOnce()
 
-            onLine("=== OmniAI-Studio Relational Room DB v9 Stats ===", TerminalLineType.SYSTEM)
+            onLine("=== OmniAI-Studio Relational Room DB v10 Stats ===", TerminalLineType.SYSTEM)
             onLine("  Projects           : $projects ($projectTasks tasks, $commitLogs git commits)", TerminalLineType.STDOUT)
             onLine("  Creator Niches     : $niches", TerminalLineType.STDOUT)
             onLine("  Next Commands      : $nextCommands", TerminalLineType.STDOUT)
@@ -493,6 +607,7 @@ class OmniCliInterpreter(
             onLine("  YT / IG / FB Posts : $socialPosts", TerminalLineType.STDOUT)
             onLine("  Hashtag Packs      : $hashtagPacks", TerminalLineType.STDOUT)
             onLine("  Character Profiles : $characters", TerminalLineType.STDOUT)
+            onLine("  YT Daily Quota     : $ytQuotaToday / ${YouTubeApiClient.DAILY_FREE_QUOTA_LIMIT} units", TerminalLineType.STDOUT)
             onLine("[DB Inspector OK]", TerminalLineType.SUCCESS)
         } catch (ex: Exception) {
             onLine("db stats error: ${ex.message}", TerminalLineType.STDERR)
@@ -715,6 +830,245 @@ class OmniCliInterpreter(
             githubBackupSync.pushEncryptedBackup(pass, selection).fold(
                 onSuccess = { msg -> onLine("GitHub Cloud Sync: $msg", TerminalLineType.SUCCESS) },
                 onFailure = { ex -> onLine("GitHub Cloud Sync skipped/failed: ${ex.message}", TerminalLineType.STDERR) }
+            )
+        }
+    }
+
+    private suspend fun runYtStats(onLine: (String, TerminalLineType) -> Unit) = withContext(Dispatchers.IO) {
+        onLine("Fetching live YouTube channel performance & daily quota...", TerminalLineType.SYSTEM)
+        val activeNiche = db.nicheDao().getNicheById(settingsRepo.current.activeNicheId)
+        val profileId = activeNiche?.linkedYoutubeProfileId?.ifBlank { null }
+        youTubeAnalyticsRepository.refresh(profileId).fold(
+            onSuccess = { (stats, videos) ->
+                val usedQuota = youTubeAnalyticsRepository.getTodayQuotaUnitsOnce()
+                val remaining = (YouTubeApiClient.DAILY_FREE_QUOTA_LIMIT - usedQuota).coerceAtLeast(0)
+                onLine("=== YouTube Channel Performance ===", TerminalLineType.SYSTEM)
+                onLine("  Channel       : ${stats.channelTitle} (${stats.channelId})", TerminalLineType.SUCCESS)
+                onLine("  Subscribers   : ${stats.subscriberCount} (${YouTubeApiClient.formatCompact(stats.subscriberCount)})", TerminalLineType.STDOUT)
+                onLine("  Total Views   : ${stats.totalViewCount} (${YouTubeApiClient.formatCompact(stats.totalViewCount)})", TerminalLineType.STDOUT)
+                onLine("  Videos        : ${stats.videoCount}", TerminalLineType.STDOUT)
+                onLine("  Daily Quota   : $usedQuota / ${YouTubeApiClient.DAILY_FREE_QUOTA_LIMIT} units used ($remaining remaining)", TerminalLineType.SUCCESS)
+                if (videos.isNotEmpty()) {
+                    onLine("--- Recent Uploads (${videos.size}) ---", TerminalLineType.SYSTEM)
+                    videos.take(8).forEachIndexed { idx, v ->
+                        onLine(
+                            "  ${idx + 1}. [${v.videoId}] ${v.title.take(48)} | ${v.viewCount} views · ${v.likeCount} likes · ${v.commentCount} comments",
+                            TerminalLineType.STDOUT
+                        )
+                    }
+                }
+            },
+            onFailure = { err ->
+                onLine("yt stats failed: ${err.message}", TerminalLineType.STDERR)
+            }
+        )
+    }
+
+    private suspend fun runYtUpload(scriptIdArg: String, onLine: (String, TerminalLineType) -> Unit) = withContext(Dispatchers.IO) {
+        val scriptId = scriptIdArg.toLongOrNull()
+        if (scriptId == null) {
+            onLine("Usage: yt upload <scriptId> (find IDs via 'db search <topic>' or Content Hub)", TerminalLineType.STDERR)
+            return@withContext
+        }
+        val bundle = db.videoScriptDao().getScriptWithRelationsById(scriptId)
+        if (bundle == null) {
+            onLine("No VideoScript found with id #$scriptId.", TerminalLineType.STDERR)
+            return@withContext
+        }
+        val videoPath = bundle.script.linkedVideoPath.trim()
+        if (videoPath.isBlank() || !File(videoPath).exists()) {
+            onLine("Script #$scriptId has no rendered MP4 file on disk at '$videoPath'. Render or link a video first.", TerminalLineType.STDERR)
+            return@withContext
+        }
+        val ytPost = bundle.socialPosts.firstOrNull { it.platform.equals("YOUTUBE", ignoreCase = true) }
+        val niche = db.nicheDao().getNicheById(bundle.script.nicheId)
+        val tags = ytPost?.hashtags.orEmpty()
+            .split(Regex("[\\s,]+"))
+            .map { it.trim().removePrefix("#") }
+            .filter { it.isNotBlank() }
+
+        val activeThumb = settingsRepo.current.activeThumbnailPath.takeIf { it.isNotBlank() && File(it).exists() }
+        val request = YouTubeUploadRequest(
+            videoFilePath = videoPath,
+            thumbnailFilePath = activeThumb,
+            title = ytPost?.title?.ifBlank { bundle.script.title } ?: bundle.script.title,
+            description = buildString {
+                if (!ytPost?.description.isNullOrBlank()) appendLine(ytPost?.description)
+                if (!ytPost?.hashtags.isNullOrBlank()) appendLine(ytPost?.hashtags)
+            }.trim().ifBlank { bundle.script.topic },
+            tags = tags,
+            privacyStatus = settingsRepo.current.youtubeDefaultPrivacy,
+            firstComment = ytPost?.pinnedComment.orEmpty(),
+            profileId = niche?.linkedYoutubeProfileId.orEmpty(),
+            scriptId = bundle.script.id,
+            socialPostId = ytPost?.id
+        )
+
+        onLine("Starting 2 MB chunked YouTube resumable upload for script #$scriptId ('${request.title}')...", TerminalLineType.SYSTEM)
+        var lastPctLogged = -10
+        youTubeApiClient.uploadVideoResumable(request) { pct, msg ->
+            if (pct - lastPctLogged >= 15 || pct >= 90) {
+                lastPctLogged = pct
+                onLine("  [$pct%] $msg", TerminalLineType.STDOUT)
+            }
+        }.fold(
+            onSuccess = { res ->
+                onLine("YOUTUBE UPLOAD COMPLETE: ${res.watchUrl}", TerminalLineType.SUCCESS)
+                onLine(
+                    "  Channel=${res.channelLabel} | Thumbnail=${if (res.thumbnailUploaded) "SET" else "DEFAULT"} | FirstComment=${if (res.firstCommentPosted) "POSTED" else "SKIPPED"} | Quota=+${res.quotaUnitsLogged}",
+                    TerminalLineType.STDOUT
+                )
+            },
+            onFailure = { err ->
+                onLine("yt upload failed: ${err.message}", TerminalLineType.STDERR)
+            }
+        )
+    }
+
+    private suspend fun runYtComments(videoIdArg: String, onLine: (String, TerminalLineType) -> Unit) = withContext(Dispatchers.IO) {
+        if (videoIdArg.isBlank()) {
+            onLine("Usage: yt comments <videoId or youtu.be URL>", TerminalLineType.STDERR)
+            return@withContext
+        }
+        onLine("Fetching latest YouTube comments for '$videoIdArg'...", TerminalLineType.SYSTEM)
+        val activeNiche = db.nicheDao().getNicheById(settingsRepo.current.activeNicheId)
+        val profileId = activeNiche?.linkedYoutubeProfileId?.ifBlank { null }
+        youTubeApiClient.fetchComments(videoIdArg, onlyUnanswered = false, profileId = profileId).fold(
+            onSuccess = { comments ->
+                if (comments.isEmpty()) {
+                    onLine("No comments found for $videoIdArg.", TerminalLineType.SYSTEM)
+                } else {
+                    onLine("=== Latest Comments (${comments.size}) ===", TerminalLineType.SYSTEM)
+                    comments.take(12).forEachIndexed { idx, c ->
+                        val replyBadge = if (c.replyCount == 0) "[UNANSWERED]" else "[${c.replyCount} replies]"
+                        onLine(
+                            "  ${idx + 1}. ${c.authorDisplayName} $replyBadge (♥${c.likeCount}): ${c.textDisplay.replace('\n', ' ').take(120)}",
+                            if (c.replyCount == 0) TerminalLineType.AI_STREAM else TerminalLineType.STDOUT
+                        )
+                    }
+                }
+            },
+            onFailure = { err ->
+                onLine("yt comments failed: ${err.message}", TerminalLineType.STDERR)
+            }
+        )
+    }
+
+    private suspend fun runCloudStatus(onLine: (String, TerminalLineType) -> Unit) = withContext(Dispatchers.IO) {
+        val session = supabaseAuthManager.refreshLocalSessionSnapshot()
+        val sync = cloudSyncRepository.syncStatus.value
+        val lastSyncText = if (sync.lastSyncedAtMs > 0L) {
+            java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(java.util.Date(sync.lastSyncedAtMs))
+        } else {
+            "Never"
+        }
+        onLine("=== Supabase Cloud DB & RBAC Status ===", TerminalLineType.SYSTEM)
+        onLine("  Configured   : ${if (session.isConfigured) "YES (${supabaseAuthManager.normalizedBaseUrl()})" else "NO"}", TerminalLineType.STDOUT)
+        onLine("  Google Email : ${session.email.ifBlank { "(Not signed in / Offline Local Mode)" }}", TerminalLineType.STDOUT)
+        onLine("  Active Role  : ${session.role.badgeText} (Approved=${session.isApproved})", TerminalLineType.SUCCESS)
+        onLine("  Device       : ${session.deviceName}", TerminalLineType.STDOUT)
+        onLine("  Last Sync    : $lastSyncText | Rows=${sync.lastSyncedRows} | Avg GZIP Saved=${sync.lastSavedPercent}%", TerminalLineType.STDOUT)
+        onLine("  Status       : ${sync.lastMessage}", TerminalLineType.SYSTEM)
+    }
+
+    private suspend fun runCloudSync(onLine: (String, TerminalLineType) -> Unit) = withContext(Dispatchers.IO) {
+        onLine("Starting two-way GZIP-compressed text delta sync with Supabase...", TerminalLineType.SYSTEM)
+        cloudSyncRepository.syncNow { progressLine ->
+            onLine("  $progressLine", TerminalLineType.STDOUT)
+        }.fold(
+            onSuccess = { summary ->
+                onLine("CLOUD SYNC COMPLETE: ${summary.message}", TerminalLineType.SUCCESS)
+            },
+            onFailure = { err ->
+                onLine("cloud sync failed: ${err.message}", TerminalLineType.STDERR)
+            }
+        )
+    }
+
+    private suspend fun runCloudUsers(onLine: (String, TerminalLineType) -> Unit) = withContext(Dispatchers.IO) {
+        onLine("Fetching registered Supabase user_profiles (OWNER only)...", TerminalLineType.SYSTEM)
+        supabaseAuthManager.listAllUserProfiles().fold(
+            onSuccess = { profiles ->
+                onLine("=== Registered Cloud Accounts (${profiles.size}) ===", TerminalLineType.SYSTEM)
+                if (profiles.isEmpty()) {
+                    onLine("  (no user_profiles rows returned)", TerminalLineType.STDOUT)
+                } else {
+                    profiles.forEachIndexed { idx, p ->
+                        val approval = if (p.isApproved) "APPROVED" else "PENDING/REVOKED"
+                        val device = p.lastDevice?.ifBlank { "Unknown" } ?: "Unknown"
+                        onLine(
+                            "  ${idx + 1}. ${p.email} [${p.role} · $approval] | Device=$device | Seen=${p.lastSeenAt?.take(16) ?: "—"}",
+                            if (p.role == "OWNER") TerminalLineType.SUCCESS else TerminalLineType.STDOUT
+                        )
+                    }
+                }
+            },
+            onFailure = { err ->
+                onLine("cloud users denied/failed: ${err.message}", TerminalLineType.STDERR)
+            }
+        )
+    }
+
+    private fun runDeviceHealth(onLine: (String, TerminalLineType) -> Unit) {
+        val snap = deviceHealthGuard.inspect()
+        onLine("=== Device Thermal & Resource Health Guard ===", TerminalLineType.SYSTEM)
+        onLine("  Thermal      : ${snap.thermalLevel.label}", if (snap.isSafeForHeavyMediaJob) TerminalLineType.SUCCESS else TerminalLineType.STDERR)
+        onLine("  Battery      : ${snap.batteryPercent}% (${if (snap.isCharging) "Charging" else "On Battery"})", TerminalLineType.STDOUT)
+        onLine("  Free Storage : ${snap.freeStorageMb} MB", TerminalLineType.STDOUT)
+        onLine("  Avail RAM    : ${snap.availableRamMb} MB (LowMemory=${snap.isLowMemory})", TerminalLineType.STDOUT)
+        onLine("  Media3 Gate  : ${if (snap.isSafeForHeavyMediaJob) "SAFE FOR RENDER" else "PAUSED"}", if (snap.isSafeForHeavyMediaJob) TerminalLineType.SUCCESS else TerminalLineType.STDERR)
+        snap.warnings.forEach { w -> onLine("  [WARN] $w", TerminalLineType.STDERR) }
+    }
+
+    private suspend fun runScanSecrets(onLine: (String, TerminalLineType) -> Unit) = withContext(Dispatchers.IO) {
+        val project = resolveActiveProject()
+        if (project == null) {
+            onLine("No active project found. Run 'proj list' first.", TerminalLineType.STDERR)
+            return@withContext
+        }
+        val report = SecretLeakScanner.scanDirectory(gitHubGitEngine.getProjectDir(project.slug))
+        onLine("=== SecretLeakScanner (${project.slug} · ${report.scannedFileCount} file(s)) ===", TerminalLineType.SYSTEM)
+        if (report.isClean) {
+            onLine("  CLEAN — 0 leaked tokens, keys, or private keys detected.", TerminalLineType.SUCCESS)
+        } else {
+            report.findings.forEach { f ->
+                onLine("  [${f.severity.label}] ${f.filePath}:${f.lineNumber} — ${f.ruleName} (${f.maskedSnippet})", TerminalLineType.STDERR)
+            }
+        }
+    }
+
+    private suspend fun runBuildDoctor(onLine: (String, TerminalLineType) -> Unit) = withContext(Dispatchers.IO) {
+        val project = resolveActiveProject()
+        if (project == null || project.githubOwner.isBlank() || project.githubRepo.isBlank()) {
+            onLine("Select a project with GitHub owner/repo configured first.", TerminalLineType.STDERR)
+            return@withContext
+        }
+        onLine("Running AI Build Doctor on latest run of ${project.githubOwner}/${project.githubRepo}...", TerminalLineType.SYSTEM)
+        val latest = runCatching { gitHubGitEngine.fetchLatestWorkflowRun(project.githubOwner, project.githubRepo) }.getOrNull()
+        if (latest == null) {
+            onLine("No GitHub Actions runs found for ${project.githubOwner}/${project.githubRepo}.", TerminalLineType.STDERR)
+            return@withContext
+        }
+        aiBuildDoctor.diagnoseFailedRun(project.githubOwner, project.githubRepo, latest.id).fold(
+            onSuccess = { diag ->
+                onLine("=== AI Build Doctor (Run #${latest.runNumber} · ${diag.providerTag}) ===", TerminalLineType.SYSTEM)
+                onLine("  Job: ${diag.failedJobName}", TerminalLineType.STDOUT)
+                diag.aiDiagnosisMarkdown.lines().forEach { line ->
+                    onLine("  $line", TerminalLineType.AI_STREAM)
+                }
+            },
+            onFailure = { ex ->
+                onLine("AI Build Doctor failed: ${ex.message}", TerminalLineType.STDERR)
+            }
+        )
+    }
+
+    private fun runKeysPoolStatus(onLine: (String, TerminalLineType) -> Unit) {
+        onLine("=== Multi-Key API Pool Status ===", TerminalLineType.SYSTEM)
+        apiKeyPoolManager.inspectPoolStatus().forEach { st ->
+            onLine(
+                "  ${st.provider.label.padEnd(16)} : ${st.healthyKeys}/${st.totalKeys} healthy (${st.coolingDownKeys} cooling down)",
+                if (st.healthyKeys > 0) TerminalLineType.SUCCESS else TerminalLineType.STDOUT
             )
         }
     }

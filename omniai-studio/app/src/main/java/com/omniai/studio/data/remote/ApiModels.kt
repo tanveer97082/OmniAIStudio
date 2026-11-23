@@ -97,7 +97,17 @@ data class StoryboardPayload(
     @SerialName("speed_factor") val speedFactor: Float = 1.0f,
     @SerialName("use_ref_image") val useRefImage: Boolean = false,
     @SerialName("seamless_loop") val seamlessLoop: Boolean = false,
-    @SerialName("social_metadata") val socialMetadata: SocialMetadata = SocialMetadata()
+    @SerialName("social_metadata") val socialMetadata: SocialMetadata = SocialMetadata(),
+    // v5.2 Direct Kaggle-to-Telegram 2 GB MTProto Uploader controls
+    @SerialName("direct_telegram_upload") val directTelegramUpload: Boolean = false,
+    @SerialName("upload_individual_scenes") val uploadIndividualScenes: Boolean = false,
+    @SerialName("telegram_caption") val telegramCaption: String = "",
+    @SerialName("skip_phone_download") val skipPhoneDownload: Boolean = false,
+    // v5.3 Direct Kaggle-to-YouTube & Meta FB/IG Reels Auto-Uploader controls
+    @SerialName("direct_youtube_upload") val directYoutubeUpload: Boolean = false,
+    @SerialName("youtube_metadata") val youtubeMetadata: YouTubeUploadMetadata? = null,
+    @SerialName("direct_fb_ig_upload") val directFbIgUpload: Boolean = false,
+    @SerialName("public_video_url") val publicVideoUrl: String = ""
 )
 
 @Serializable
@@ -187,7 +197,22 @@ data class VaultSnapshot(
     val githubToken: String = "",
     val telegramBotToken: String = "",
     val telegramChatId: String = "",
+    val telegramApiId: String = "",
+    val telegramApiHash: String = "",
     val customWebhookUrl: String = "",
+    // v5.3 YouTube Data API v3 Multi-Channel & Meta FB/IG Reels Graph API
+    val ytClientId: String = "",
+    val ytClientSecret: String = "",
+    val ytRefreshToken: String = "",
+    val ytChannelLabel: String = "Primary Channel",
+    val ytProfilesJson: String = "[]",
+    val activeYtProfileId: String = "",
+    val metaPageId: String = "",
+    val metaIgUserId: String = "",
+    val metaPageAccessToken: String = "",
+    // v5.5 Supabase Cloud DB & Google OAuth PKCE Configuration
+    val supabaseUrl: String = "",
+    val supabaseAnonKey: String = "",
     val appLockEnabled: Boolean = false,
     val vaultLockEnabled: Boolean = true,
     val flagSecureEnabled: Boolean = true,
@@ -333,6 +358,7 @@ data class GitDiffResult(
     val synced: List<String> = emptyList()
 ) {
     val totalPending: Int get() = added.size + modified.size + deleted.size
+    val totalPendingCount: Int get() = totalPending
     val hasChanges: Boolean get() = totalPending > 0
 }
 
@@ -454,5 +480,94 @@ data class ActionsMonitorState(
     val releaseApkAsset: GitHubReleaseAsset? = null,
     val releaseTagName: String = ""
 )
+
+// =========================================================================
+// v5.3 YOUTUBE DATA API v3 AUTO-UPLOADER, ANALYTICS, COMMENTS & META REELS
+// =========================================================================
+
+@Serializable
+data class YouTubeUploadMetadata(
+    val title: String = "",
+    val description: String = "",
+    val tags: List<String> = emptyList(),
+    @SerialName("category_id") val categoryId: String = "22",
+    @SerialName("privacy_status") val privacyStatus: String = "private", // "private" | "unlisted" | "public"
+    @SerialName("publish_at") val publishAt: String = "",
+    @SerialName("first_comment") val firstComment: String = ""
+)
+
+@Serializable
+data class YouTubeChannelProfile(
+    val id: String,
+    val label: String,
+    val clientId: String,
+    val clientSecret: String,
+    val refreshToken: String,
+    val defaultCategoryId: String = "22",
+    val defaultPrivacy: String = "private"
+)
+
+data class YouTubeUploadRequest(
+    val videoFilePath: String,
+    val thumbnailFilePath: String? = null,
+    val title: String,
+    val description: String,
+    val tags: List<String> = emptyList(),
+    val categoryId: String = "22",
+    val privacyStatus: String = "private",
+    val publishAtIso: String = "",
+    val firstComment: String = "",
+    val profileId: String = "",
+    val scriptId: Long? = null,
+    val socialPostId: Long? = null
+)
+
+data class YouTubeUploadResult(
+    val videoId: String,
+    val watchUrl: String,
+    val thumbnailUploaded: Boolean,
+    val firstCommentPosted: Boolean,
+    val quotaUnitsLogged: Int,
+    val channelLabel: String
+)
+
+@Serializable
+data class YouTubeChannelStats(
+    val channelId: String = "",
+    val channelTitle: String = "",
+    val subscriberCount: Long = 0L,
+    val totalViewCount: Long = 0L,
+    val videoCount: Long = 0L,
+    val fetchedAtMs: Long = System.currentTimeMillis()
+)
+
+@Serializable
+data class YouTubeVideoPerformance(
+    val videoId: String = "",
+    val title: String = "",
+    val viewCount: Long = 0L,
+    val likeCount: Long = 0L,
+    val commentCount: Long = 0L,
+    val publishedAt: String = "",
+    val thumbnailUrl: String = ""
+)
+
+data class YouTubeCommentItem(
+    val commentThreadId: String,
+    val topLevelCommentId: String,
+    val videoId: String,
+    val authorDisplayName: String,
+    val textDisplay: String,
+    val likeCount: Int = 0,
+    val publishedAt: String = "",
+    val replyCount: Int = 0
+)
+
+data class MetaReelsUploadResult(
+    val platform: String,
+    val postId: String,
+    val statusMessage: String
+)
+
 
 

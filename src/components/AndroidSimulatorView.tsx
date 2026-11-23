@@ -314,6 +314,157 @@ export const AndroidSimulatorView: React.FC<{ onInspectSource: (path: string) =>
   const [panicStage, setPanicStage] = useState<0 | 1 | 2>(0);
   const [wipedNotice, setWipedNotice] = useState<string | null>(null);
 
+  // v5.2/v5.3/v5.5 In-App Setup Guides, YouTube API v3, Meta Reels, 2 GB Telegram & Supabase Cloud RBAC State
+  const [activeGuideKey, setActiveGuideKey] = useState<
+    null | 'telegram' | 'colab' | 'kaggle' | 'github' | 'hf' | 'gemini' | 'groq' | 'youtube' | 'meta' | 'supabase'
+  >(null);
+  const [simCloudRole, setSimCloudRole] = useState<'OWNER' | 'EDITOR' | 'VIEWER' | 'PENDING' | 'OFFLINE'>('OWNER');
+  const [directTelegramUpload, setDirectTelegramUpload] = useState(true);
+  const [skipPhoneDownload, setSkipPhoneDownload] = useState(true);
+  const [simTgChatId, setSimTgChatId] = useState('');
+  const [directYoutubeUpload, setDirectYoutubeUpload] = useState(true);
+  const [ytPrivacy, setYtPrivacy] = useState<'private' | 'unlisted' | 'public'>('private');
+  const [ytDailyQuotaUsed, setYtDailyQuotaUsed] = useState(1650);
+  const [adobeReturnBannerSource, setAdobeReturnBannerSource] = useState<string | null>(null);
+
+  const SIM_PLATFORM_GUIDES = {
+    telegram: {
+      title: 'Telegram Bot & 2 GB Direct Kaggle Upload',
+      portalLabel: 'Open my.telegram.org',
+      portalUrl: 'https://my.telegram.org',
+      faq: 'Standard HTTP Bot API caps uploads at 50 MB. Adding TG_API_ID + TG_API_HASH unlocks headless Telethon MTProto up to 2 GB directly from Kaggle GPU!',
+      steps: [
+        'Message @BotFather -> /newbot -> copy TG_BOT_TOKEN.',
+        'Tap Auto-Detect Chat ID (or send /start to your bot) to populate TG_CHAT_ID.',
+        'Sign in at my.telegram.org -> API development tools -> copy TG_API_ID & TG_API_HASH.',
+        'Add all 4 labels in Kaggle Notebook -> Add-ons -> Secrets and check Attach.',
+      ],
+      commandTitle: 'Verify TG_BOT_TOKEN & Chat ID',
+      command: 'curl -s "https://api.telegram.org/bot$TG_BOT_TOKEN/getUpdates" | head -c 400',
+    },
+    colab: {
+      title: 'Uncensored AI (Colab / Termux Tunnel)',
+      portalLabel: 'Open Google Colab',
+      portalUrl: 'https://colab.research.google.com',
+      faq: 'Run the 1-cell Colab script on a free T4 GPU or start llama-server locally in Termux.',
+      steps: [
+        'Open Google Colab -> Runtime -> T4 GPU -> paste the 1-cell script below.',
+        'Copy the printed https://xxxx.trycloudflare.com/v1 URL into Vault.',
+        'For local Termux: enable allow-external-apps=true and launch llama-server on :8080.',
+      ],
+      commandTitle: 'Termux External Apps + Local GGUF Server',
+      command: 'echo "allow-external-apps=true" >> ~/.termux/termux.properties && termux-reload-settings',
+    },
+    kaggle: {
+      title: 'Kaggle T4 x2 GPU Worker',
+      portalLabel: 'Open Kaggle Settings',
+      portalUrl: 'https://www.kaggle.com/settings',
+      faq: 'Attach TG_BOT_TOKEN, TG_CHAT_ID, TG_API_ID & TG_API_HASH in Notebook Add-ons -> Secrets for direct 2 GB Telegram uploads.',
+      steps: [
+        'Open kaggle.com/settings -> API -> Create New Token (kaggle.json).',
+        'Enable Accelerator: GPU T4 x2 and Internet: On in your worker notebook.',
+        'Paste Username + API Key into Vault to enable background Dual-T4 renders.',
+      ],
+      commandTitle: 'Push Kaggle Worker Kernel',
+      command: 'kaggle kernels push -p kaggle_worker/',
+    },
+    github: {
+      title: 'GitHub CI/CD & Auto-Push',
+      portalLabel: 'Open GitHub Token Settings',
+      portalUrl: 'https://github.com/settings/tokens/new?scopes=repo,workflow',
+      faq: 'Zero-JGit atomic Git Data API push uses repo + workflow scopes for 1-tap APK builds.',
+      steps: [
+        'Create Classic PAT with repo and workflow scopes checked.',
+        'Enter owner/OmniAI-Studio and PAT in Vault.',
+        'Push from Projects tab -> Actions auto-builds v5.3.N APK.',
+      ],
+      commandTitle: 'Verify GitHub PAT & Scopes',
+      command: 'curl -sI -H "Authorization: Bearer $GITHUB_TOKEN" https://api.github.com/user | grep -i x-oauth-scopes',
+    },
+    hf: {
+      title: 'Hugging Face Serverless',
+      portalLabel: 'Open HF Tokens',
+      portalUrl: 'https://huggingface.co/settings/tokens',
+      faq: 'Check "Make calls to Inference Providers" when creating a Fine-grained token.',
+      steps: [
+        'Open huggingface.co/settings/tokens -> Create new token.',
+        'Enable Make calls to Inference Providers and paste hf_... into Vault.',
+      ],
+      commandTitle: 'Test HF Router Inference',
+      command: 'curl -s https://router.huggingface.co/v1/chat/completions -H "Authorization: Bearer $HF_TOKEN"',
+    },
+    gemini: {
+      title: 'Google Gemini API & Multi-Key Pool',
+      portalLabel: 'Open Google AI Studio',
+      portalUrl: 'https://aistudio.google.com/apikey',
+      faq: 'Enter comma-separated AIza... keys in Vault for automatic HTTP 429 pool rotation.',
+      steps: [
+        'Open aistudio.google.com/apikey -> Create API Key.',
+        'Paste one or comma-separated backup keys into Tertiary Gemini Key.',
+      ],
+      commandTitle: 'Test Gemini 2.5 Flash Key',
+      command: 'curl -s "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=$GEMINI_API_KEY"',
+    },
+    groq: {
+      title: 'Groq / OpenRouter OpenAI Presets',
+      portalLabel: 'Open Groq Console',
+      portalUrl: 'https://console.groq.com/keys',
+      faq: 'Tap Groq or OpenRouter chip in Quick Provider Presets to auto-fill Base URL & Model ID.',
+      steps: [
+        'Generate gsk_... (Groq) or sk-or-... (OpenRouter) key.',
+        'Tap the matching Quick Provider Preset in Vault and paste your key.',
+      ],
+      commandTitle: 'Verify Groq Models Endpoint',
+      command: 'curl -s https://api.groq.com/openai/v1/models -H "Authorization: Bearer $GROQ_API_KEY"',
+    },
+    youtube: {
+      title: 'YouTube Data API v3 (OAuth2 + 2 MB Resumable Upload)',
+      portalLabel: 'Open Google Cloud Console',
+      portalUrl: 'https://console.cloud.google.com/apis/library/youtube.googleapis.com',
+      faq: 'Unverified Personal App Rule: Videos uploaded via an unverified GCP OAuth app default to Private until toggled Public in YouTube Studio (1 tap). Free daily quota is 10,000 units (~6 full uploads/day at ~1,650 units each).',
+      steps: [
+        'Enable YouTube Data API v3 in Google Cloud Console.',
+        'Configure OAuth Consent Screen -> External -> Add your Gmail as Test User.',
+        'Create OAuth 2.0 Client ID -> Desktop App -> copy Client ID & Secret.',
+        'Run the 15-line Python google_auth_oauthlib script once to print YT_REFRESH_TOKEN.',
+        'Add YT_CLIENT_ID, YT_CLIENT_SECRET & YT_REFRESH_TOKEN to Vault and Kaggle Secrets.',
+      ],
+      commandTitle: '1-Time OAuth2 Refresh Token Script (Python)',
+      command:
+        'python3 -c "from google_auth_oauthlib.flow import InstalledAppFlow; flow=InstalledAppFlow.from_client_secrets_file(\'client_secret.json\',[\'https://www.googleapis.com/auth/youtube.upload\',\'https://www.googleapis.com/auth/youtube.force-ssl\']); c=flow.run_local_server(port=0); print(\'YT_REFRESH_TOKEN=\',c.refresh_token)"',
+    },
+    meta: {
+      title: 'Meta Reels Graph API (FB Page & IG Business)',
+      portalLabel: 'Open Meta Developers',
+      portalUrl: 'https://developers.facebook.com/apps/',
+      faq: 'Requires a Facebook Page linked to an Instagram Professional/Business account and a 60-day long-lived Page Access Token.',
+      steps: [
+        'Create a Meta Business App and generate a User Token with pages_show_list, publish_video & instagram_content_publish.',
+        'Exchange for a 60-day long-lived Page Access Token using the Graph API curl below.',
+        'Paste META_PAGE_ID, META_IG_USER_ID & META_PAGE_ACCESS_TOKEN into Vault or Kaggle Secrets.',
+      ],
+      commandTitle: 'Exchange 60-Day Long-Lived Meta Token',
+      command:
+        'curl -G "https://graph.facebook.com/v19.0/oauth/access_token" -d "grant_type=fb_exchange_token" -d "client_id=$META_APP_ID" -d "client_secret=$META_APP_SECRET" -d "fb_exchange_token=$SHORT_TOKEN"',
+    },
+    supabase: {
+      title: 'Supabase PostgreSQL Cloud DB, Google OAuth PKCE & RBAC',
+      portalLabel: 'Open Supabase Dashboard',
+      portalUrl: 'https://supabase.com/dashboard',
+      faq: 'Zero extra Gradle SDKs! Pure OkHttp3 PKCE S256 + GZIP text-only delta sync (<=256 KB/row, zero MP4/images) + first-user OWNER auto-bootstrap with server-enforced RLS.',
+      steps: [
+        'Create a free Supabase project and paste supabase/schema_and_rls.sql in SQL Editor -> Run.',
+        'In Supabase Authentication -> Providers -> Google, enable Google OAuth with your GCP Web Client ID & Secret.',
+        'In Authentication -> URL Configuration -> Redirect URLs, add omniaistudio://auth-callback.',
+        'Paste SUPABASE_URL and SUPABASE_ANON_KEY in OmniAI Vault or Cloud DB & Roles.',
+        'Add SUPABASE_URL & SUPABASE_ANON_KEY to GitHub Repo Secrets for the 4-day keep-supabase-alive.yml cron.',
+      ],
+      commandTitle: 'Verify Supabase PostgREST & Anti-Pause Endpoint',
+      command:
+        'curl -s "$SUPABASE_URL/rest/v1/user_profiles?select=count" -H "apikey: $SUPABASE_ANON_KEY"',
+    },
+  } as const;
+
   const activeAccent = THEME_ACCENTS.find((a) => a.id === accentId) ?? THEME_ACCENTS[1];
   const activeIconMeta = APP_ICON_VARIANTS.find((v) => v.id === iconVariant) ?? APP_ICON_VARIANTS[0];
   const selectedCharacter = characterProfiles.find((c) => c.id === selectedCharacterId) ?? null;
@@ -578,7 +729,7 @@ export const AndroidSimulatorView: React.FC<{ onInspectSource: (path: string) =>
               <div className="flex items-center justify-between border-b border-[#232330] pb-2.5">
                 <div>
                   <div className="font-semibold text-zinc-100">{activeIconMeta.launcherLabel}</div>
-                  <div className="text-[10px] text-zinc-400">Hub &amp; Power Tools · v5.1</div>
+                  <div className="text-[10px] text-zinc-400">Hub &amp; Power Tools · v5.5 · {simCloudRole}</div>
                 </div>
                 <button
                   type="button"
@@ -689,6 +840,14 @@ export const AndroidSimulatorView: React.FC<{ onInspectSource: (path: string) =>
             >
               <X className="h-3 w-3" />
             </button>
+          </div>
+        )}
+
+        {/* v5.5 Viewer Role Read-Only Guard Banner */}
+        {simCloudRole === 'VIEWER' && !showSettingsHub && (
+          <div className="mx-3 mt-2 flex items-center gap-2 rounded-lg border border-amber-500/45 bg-amber-500/12 px-2.5 py-1.5 text-[10px] font-medium text-amber-300">
+            <Eye className="h-3.5 w-3.5 shrink-0" />
+            <span>Read-Only (Viewer Role) — Edit, Delete, Render, Git Push &amp; Vault writes disabled</span>
           </div>
         )}
 
@@ -2360,6 +2519,171 @@ export const AndroidSimulatorView: React.FC<{ onInspectSource: (path: string) =>
                       <span className="text-zinc-400">Kaggle Key</span>
                       <span className="text-zinc-100">{keysRevealed ? 'kg_dual_t4_2819' : '••••2819'}</span>
                     </div>
+                    <div className="flex flex-wrap gap-1.5 border-t border-zinc-800 pt-2">
+                      {(
+                        [
+                          { id: 'colab', label: '? Colab/Termux' },
+                          { id: 'hf', label: '? HF' },
+                          { id: 'gemini', label: '? Gemini' },
+                          { id: 'kaggle', label: '? Kaggle' },
+                          { id: 'github', label: '? GitHub' },
+                        ] as const
+                      ).map((g) => (
+                        <button
+                          key={g.id}
+                          type="button"
+                          onClick={() => setActiveGuideKey(g.id)}
+                          className="rounded-full border border-emerald-500/35 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-medium text-emerald-300 hover:bg-emerald-500/20"
+                        >
+                          {g.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* v5.2 Telegram Bot & 2 GB Direct Kaggle Upload Card */}
+                  <div className="space-y-2 rounded-lg border border-zinc-800 bg-[#0B0E14] p-2.5 text-xs">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-semibold text-zinc-100">Telegram 2 GB Direct Upload</span>
+                      <button
+                        type="button"
+                        onClick={() => setActiveGuideKey('telegram')}
+                        className="rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-semibold text-emerald-300 hover:bg-emerald-500/20"
+                      >
+                        ? Setup Guide &amp; Commands
+                      </button>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <input
+                        type="text"
+                        value={simTgChatId}
+                        onChange={(e) => setSimTgChatId(e.target.value)}
+                        placeholder="TG_CHAT_ID (-100...)"
+                        className="flex-1 rounded border border-zinc-800 bg-black px-2 py-1 font-mono text-[11px] text-zinc-100"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSimTgChatId('-1002389412055');
+                          triggerToast('Auto-detected Chat ID -1002389412055 (@OmniAI_Archive) via /getUpdates');
+                        }}
+                        className="rounded border border-emerald-500/40 bg-emerald-500/15 px-2 py-1 text-[10px] font-semibold text-emerald-300 hover:bg-emerald-500/25"
+                      >
+                        Auto-Detect
+                      </button>
+                    </div>
+                    <label className="flex items-center justify-between text-[11px]">
+                      <span>Direct Kaggle → Telegram (2 GB MTProto)</span>
+                      <input
+                        type="checkbox"
+                        checked={directTelegramUpload}
+                        onChange={(e) => setDirectTelegramUpload(e.target.checked)}
+                        style={{ accentColor: activeAccent.hex }}
+                      />
+                    </label>
+                    <label className="flex items-center justify-between text-[11px]">
+                      <span>Save Mobile Data (Skip Phone Download)</span>
+                      <input
+                        type="checkbox"
+                        checked={skipPhoneDownload}
+                        disabled={!directTelegramUpload}
+                        onChange={(e) => setSkipPhoneDownload(e.target.checked)}
+                        style={{ accentColor: activeAccent.hex }}
+                      />
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        triggerToast('Copied Kaggle Secrets Setup (TG_BOT_TOKEN, TG_CHAT_ID, TG_API_ID, TG_API_HASH)')
+                      }
+                      className="w-full rounded border border-zinc-700 bg-zinc-900 py-1 text-[11px] font-medium text-zinc-200 hover:bg-zinc-800"
+                    >
+                      Copy Kaggle Secrets Setup
+                    </button>
+                  </div>
+
+                  {/* v5.3 YouTube Data API v3 & Meta Reels Auto-Uploader Card */}
+                  <div className="space-y-2 rounded-lg border border-zinc-800 bg-[#0B0E14] p-2.5 text-xs">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-semibold text-zinc-100">YouTube API v3 &amp; Meta Reels</span>
+                      <div className="flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => setActiveGuideKey('youtube')}
+                          className="rounded-full border border-red-500/40 bg-red-500/10 px-2 py-0.5 text-[10px] font-semibold text-red-300 hover:bg-red-500/20"
+                        >
+                          ? YT Guide
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setActiveGuideKey('meta')}
+                          className="rounded-full border border-cyan-500/40 bg-cyan-500/10 px-2 py-0.5 text-[10px] font-semibold text-cyan-300 hover:bg-cyan-500/20"
+                        >
+                          ? Meta
+                        </button>
+                      </div>
+                    </div>
+                    <label className="flex items-center justify-between text-[11px]">
+                      <span>Direct Kaggle → YouTube Auto-Upload</span>
+                      <input
+                        type="checkbox"
+                        checked={directYoutubeUpload}
+                        onChange={(e) => setDirectYoutubeUpload(e.target.checked)}
+                        style={{ accentColor: activeAccent.hex }}
+                      />
+                    </label>
+                    <div className="flex items-center justify-between text-[11px]">
+                      <span className="text-zinc-400">Privacy</span>
+                      <div className="flex gap-1">
+                        {(['private', 'unlisted', 'public'] as const).map((p) => (
+                          <button
+                            key={p}
+                            type="button"
+                            onClick={() => setYtPrivacy(p)}
+                            className="rounded px-1.5 py-0.5 text-[10px] capitalize"
+                            style={{
+                              backgroundColor: ytPrivacy === p ? `${activeAccent.hex}30` : '#18181b',
+                              color: ytPrivacy === p ? activeAccent.hex : '#a1a1aa',
+                            }}
+                          >
+                            {p}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                    <div className="space-y-1">
+                      <div className="flex justify-between font-mono text-[10px] text-zinc-400">
+                        <span>Daily YT Quota</span>
+                        <span className="text-emerald-400">{ytDailyQuotaUsed.toLocaleString()} / 10,000 units</span>
+                      </div>
+                      <div className="h-1.5 w-full overflow-hidden rounded-full bg-zinc-800">
+                        <div
+                          className="h-full rounded-full bg-emerald-400"
+                          style={{ width: `${Math.min(100, (ytDailyQuotaUsed / 10000) * 100)}%` }}
+                        />
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          triggerToast('YouTube OAuth2 OK: Connected to Main Tech Channel (14.2K subs)');
+                        }}
+                        className="rounded border border-emerald-500/40 bg-emerald-500/15 py-1 text-[10px] font-semibold text-emerald-300 hover:bg-emerald-500/25"
+                      >
+                        Test YT OAuth
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setYtDailyQuotaUsed((q) => Math.min(10000, q + 1650));
+                          triggerToast('Simulated 2 MB Resumable Upload -> https://youtu.be/oMn1Ai53 (+1,650 units)');
+                        }}
+                        className="rounded border border-zinc-700 bg-zinc-900 py-1 text-[10px] font-medium text-zinc-200 hover:bg-zinc-800"
+                      >
+                        Sim YT Upload
+                      </button>
+                    </div>
                   </div>
 
                   <div className="space-y-2 rounded-lg border border-zinc-800 bg-[#0B0E14] p-2.5 text-xs">
@@ -2500,6 +2824,40 @@ export const AndroidSimulatorView: React.FC<{ onInspectSource: (path: string) =>
           )}
         </div>
 
+        {/* v5.5 Server-Enforced RBAC Pending Approval Lock Screen */}
+        {simCloudRole === 'PENDING' && !lockOverlayOpen && !decoySandboxOpen && (
+          <div className="absolute inset-0 z-30 flex flex-col items-center justify-center bg-[#09090C]/95 p-6 text-center">
+            <div className="w-full space-y-3 rounded-2xl border border-[#232330] bg-[#13131A] p-5">
+              <ShieldAlert className="mx-auto h-10 w-10 text-amber-400" />
+              <h3 className="text-base font-semibold text-zinc-100">Awaiting Owner Approval</h3>
+              <p className="text-[11px] leading-relaxed text-zinc-400">
+                Signed in via Google OAuth PKCE (<span className="font-mono text-zinc-200">teammate@studio.dev</span>). The workspace OWNER must approve your account in Supabase RBAC before cloud sync unlocks.
+              </p>
+              <button
+                type="button"
+                onClick={() => {
+                  setSimCloudRole('EDITOR');
+                  triggerToast('Role refreshed from Supabase: EDITOR (Approved) — Delta Syncing...');
+                }}
+                className="w-full rounded-lg py-2 text-xs font-semibold text-zinc-950"
+                style={{ backgroundColor: activeAccent.hex }}
+              >
+                Refresh Approval Status
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setSimCloudRole('OFFLINE');
+                  triggerToast('Switched to Offline Local Mode (100% local Room DB).');
+                }}
+                className="w-full rounded-lg border border-zinc-700 bg-zinc-900 py-1.5 text-xs font-medium text-zinc-200 hover:bg-zinc-800"
+              >
+                Switch to Offline Local Mode
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Upgrade 6: Duress / Decoy PIN Lock Overlay */}
         {lockOverlayOpen && (
           <div className="absolute inset-0 z-30 flex flex-col items-center justify-center bg-black p-6 text-center">
@@ -2635,6 +2993,114 @@ export const AndroidSimulatorView: React.FC<{ onInspectSource: (path: string) =>
           </div>
         )}
 
+        {/* v5.2 In-App Platform Setup Guide ModalBottomSheet Preview */}
+        {activeGuideKey && (
+          <div className="absolute inset-0 z-30 flex items-end bg-black/75">
+            <div className="max-h-[85%] w-full overflow-y-auto rounded-t-2xl border-t border-[#232330] bg-[#13131A] p-4 text-xs text-zinc-200 space-y-3">
+              <div className="flex items-start justify-between gap-2">
+                <div>
+                  <div className="font-semibold text-zinc-100">
+                    {SIM_PLATFORM_GUIDES[activeGuideKey].title}
+                  </div>
+                  <div className="text-[10px] text-emerald-400">
+                    In-App Interactive Setup Guide · v5.5
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  aria-label="Close Setup Guide"
+                  onClick={() => setActiveGuideKey(null)}
+                  className="rounded p-1 text-zinc-400 hover:bg-[#1B1B25] hover:text-zinc-100"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+              <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-2 text-[11px] text-amber-200">
+                {SIM_PLATFORM_GUIDES[activeGuideKey].faq}
+              </div>
+              <ol className="space-y-1.5 text-[11px] text-zinc-300">
+                {SIM_PLATFORM_GUIDES[activeGuideKey].steps.map((step, i) => (
+                  <li key={i} className="flex gap-2">
+                    <span className="font-mono text-emerald-400">{i + 1}.</span>
+                    <span>{step}</span>
+                  </li>
+                ))}
+              </ol>
+              <div className="space-y-1.5 rounded-lg border border-[#232330] bg-[#09090C] p-2.5">
+                <div className="text-[10px] font-semibold text-zinc-400">
+                  {SIM_PLATFORM_GUIDES[activeGuideKey].commandTitle}
+                </div>
+                <pre className="overflow-x-auto whitespace-pre-wrap break-all font-mono text-[10px] leading-relaxed text-emerald-300">
+                  {SIM_PLATFORM_GUIDES[activeGuideKey].command}
+                </pre>
+                <div className="flex gap-2 pt-1">
+                  <button
+                    type="button"
+                    onClick={() => triggerToast('Copied command to clipboard!')}
+                    className="flex-1 rounded border border-zinc-700 bg-zinc-900 py-1 text-[10px] font-medium text-zinc-200 hover:bg-zinc-800"
+                  >
+                    Copy
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActiveGuideKey(null);
+                      triggerToast('Dispatched guide command to Hybrid Terminal!');
+                    }}
+                    className="flex-1 rounded py-1 text-[10px] font-semibold text-zinc-950"
+                    style={{ backgroundColor: activeAccent.hex }}
+                  >
+                    Run in Terminal
+                  </button>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() =>
+                  triggerToast(`LocalUriHandler -> ${SIM_PLATFORM_GUIDES[activeGuideKey].portalUrl}`)
+                }
+                className="w-full rounded-lg border border-emerald-500/40 bg-emerald-500/15 py-1.5 text-[11px] font-semibold text-emerald-300 hover:bg-emerald-500/25"
+              >
+                {SIM_PLATFORM_GUIDES[activeGuideKey].portalLabel}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* v5.4 Seamless Return-from-Adobe ON_RESUME Banner Preview */}
+        {adobeReturnBannerSource && !showSettingsHub && (
+          <div className="mx-2.5 mb-2 flex items-center gap-2 rounded-xl border border-emerald-500/60 bg-emerald-500/15 px-3 py-2 text-[11px]">
+            <div className="min-w-0 flex-1">
+              <div className="font-semibold text-emerald-300">
+                Back from {adobeReturnBannerSource}!
+              </div>
+              <div className="text-[10px] text-zinc-200">
+                Pick your exported thumbnail to attach to YouTube
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                setAdobeReturnBannerSource(null);
+                triggerToast(
+                  'PickVisualMedia -> copied to filesDir/thumbnails/script_1.jpg & bound to YouTube Upload!'
+                );
+              }}
+              className="rounded-md bg-emerald-500 px-2.5 py-1 text-[10px] font-semibold text-zinc-950 hover:bg-emerald-400"
+            >
+              Pick
+            </button>
+            <button
+              type="button"
+              aria-label="Dismiss Adobe return banner"
+              onClick={() => setAdobeReturnBannerSource(null)}
+              className="rounded p-0.5 text-zinc-400 hover:text-zinc-100"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        )}
+
         {/* Material 3 Bottom Navigation Bar (v5.1 Strictly 4 Clean Tabs) */}
         {!showSettingsHub && (
           <nav
@@ -2673,12 +3139,53 @@ export const AndroidSimulatorView: React.FC<{ onInspectSource: (path: string) =>
         <div className="space-y-3">
           <div>
             <h2 className="text-xl font-semibold tracking-tight text-zinc-100">
-              OmniAI-Studio v5.1 · AMOLED Bento Preview
+              OmniAI-Studio v5.5 · Supabase Cloud DB, Google OAuth PKCE &amp; Server-Enforced RBAC
             </h2>
             <p className="mt-1.5 text-sm leading-6 text-zinc-400">
-              Pure UI/UX Declutter &amp; Progressive Disclosure refactor with 100% of v1.0–v4.5 backends intact: Unified Design Tokens (#09090C / #13131A / #232330 / #1B1B25), 4-Tab Hub-and-Spoke Shell + Slide-Out Drawer, Home Bento Command Dashboard, Chat Zen Focus Mode &amp; Plus (+) ModalBottomSheet, 3-Step Video Studio + Render Settings Sheet, Sticky Git Auto-Push Pill &amp; Full-Screen Code Editor.
+              Adds a pure-OkHttp3 <strong className="text-zinc-200">Supabase PostgreSQL Compressed Text-Only Cloud DB</strong> (<code className="text-emerald-300">GZIP + Base64 &lt;= 256 KB/row</code>, zero MP4/images), <strong className="text-zinc-200">Google OAuth 2.0 PKCE (S256)</strong> via system browser (<code className="text-emerald-300">omniaistudio://auth-callback</code>), server-enforced <strong className="text-zinc-200">PostgreSQL RLS RBAC</strong> (<code className="text-emerald-300">OWNER / EDITOR / VIEWER / PENDING</code>), and a 4-day anti-pause CI cron — with zero Firebase, Play Services, or Supabase SDK Gradle dependencies.
             </p>
           </div>
+
+          {/* Interactive v5.5 RBAC Role Preview Toggle */}
+          <div className="rounded-xl border border-zinc-800 bg-[#0B0E14] p-3 space-y-2">
+            <div className="flex items-center justify-between gap-2 text-xs">
+              <span className="font-semibold text-zinc-200">Preview RBAC Role State</span>
+              <span className="font-mono text-[11px] text-emerald-400">
+                Active: {simCloudRole} · Delta Sync 78% GZIP saved
+              </span>
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {(['OWNER', 'EDITOR', 'VIEWER', 'PENDING', 'OFFLINE'] as const).map((role) => {
+                const active = simCloudRole === role;
+                return (
+                  <button
+                    key={role}
+                    type="button"
+                    onClick={() => {
+                      setSimCloudRole(role);
+                      setLockOverlayOpen(false);
+                      setDecoySandboxOpen(false);
+                      triggerToast(
+                        role === 'PENDING'
+                          ? 'RBAC Gate: PendingApprovalLockScreen active until OWNER approves'
+                          : role === 'VIEWER'
+                            ? 'RBAC Guard: Read-Only (Viewer Role) — writes/renders/Vault locked'
+                            : `RBAC Role Preview -> ${role}`
+                      );
+                    }}
+                    className={`rounded-md border px-2.5 py-1 font-mono text-[11px] font-medium transition-colors ${
+                      active
+                        ? 'border-emerald-500/70 bg-emerald-500/20 text-emerald-300'
+                        : 'border-zinc-700 bg-zinc-900 text-zinc-300 hover:border-zinc-500'
+                    }`}
+                  >
+                    {role}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
           <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
@@ -2686,14 +3193,63 @@ export const AndroidSimulatorView: React.FC<{ onInspectSource: (path: string) =>
                 setDecoySandboxOpen(false);
                 setLockOverlayOpen(false);
                 setShowSettingsHub(false);
-                setActiveTab('chat');
-                setChatInput('Quick Voice Tile (LAUNCH_VOICE_CHAT=true): Draft a 4-scene AI security brief');
-                triggerToast('QuickVoiceTileService launched Tab 0 Voice Dictation!');
+                setSimCloudRole('OWNER');
+                setActiveTab('vault');
+                setActiveGuideKey('supabase');
               }}
-              className="inline-flex items-center gap-1.5 rounded-md border border-zinc-700 bg-zinc-900 px-2.5 py-1.5 text-xs font-medium text-zinc-200 hover:border-emerald-500/50 hover:text-emerald-300 transition-colors whitespace-nowrap"
+              className="inline-flex items-center gap-1.5 rounded-md border border-emerald-500/60 bg-emerald-500/15 px-2.5 py-1.5 text-xs font-medium text-emerald-300 hover:bg-emerald-500/25 transition-colors whitespace-nowrap"
             >
-              <Mic className="h-3.5 w-3.5" />
-              <span>Quick Voice Tile</span>
+              <Shield className="h-3.5 w-3.5" />
+              <span>? Supabase Cloud Guide</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setDecoySandboxOpen(false);
+                setLockOverlayOpen(false);
+                setShowSettingsHub(false);
+                setSimCloudRole('OWNER');
+                setActiveGuideKey(null);
+                setActiveTab('director');
+                setAdobeReturnBannerSource('Adobe Firefly');
+                triggerToast(
+                  'Thumbnail prompt copied! Native Adobe Firefly launch -> ON_RESUME return banner ready'
+                );
+              }}
+              className="inline-flex items-center gap-1.5 rounded-md border border-rose-500/50 bg-rose-500/15 px-2.5 py-1.5 text-xs font-medium text-rose-300 hover:bg-rose-500/25 transition-colors whitespace-nowrap"
+            >
+              <Sparkles className="h-3.5 w-3.5" />
+              <span>Test Adobe Firefly Bridge</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setDecoySandboxOpen(false);
+                setLockOverlayOpen(false);
+                setShowSettingsHub(false);
+                setSimCloudRole('OWNER');
+                setActiveTab('vault');
+                setActiveGuideKey('youtube');
+              }}
+              className="inline-flex items-center gap-1.5 rounded-md border border-red-500/50 bg-red-500/15 px-2.5 py-1.5 text-xs font-medium text-red-300 hover:bg-red-500/25 transition-colors whitespace-nowrap"
+            >
+              <UploadCloud className="h-3.5 w-3.5" />
+              <span>? YouTube API v3 Guide</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setDecoySandboxOpen(false);
+                setLockOverlayOpen(false);
+                setShowSettingsHub(false);
+                setSimCloudRole('OWNER');
+                setActiveTab('vault');
+                setActiveGuideKey('telegram');
+              }}
+              className="inline-flex items-center gap-1.5 rounded-md border border-emerald-500/50 bg-emerald-500/15 px-2.5 py-1.5 text-xs font-medium text-emerald-300 hover:bg-emerald-500/25 transition-colors whitespace-nowrap"
+            >
+              <Sparkles className="h-3.5 w-3.5" />
+              <span>? 2 GB Telegram Guide</span>
             </button>
             <button
               type="button"
@@ -2724,46 +3280,39 @@ export const AndroidSimulatorView: React.FC<{ onInspectSource: (path: string) =>
           {(
             [
               {
-                key: 'design-tokens',
-                title: 'v5.1 · Unified AMOLED Design System & Spacing Grid',
+                key: 'supabase-sql-rls',
+                title: 'v5.5 · Supabase PostgreSQL Schema, Auto-Owner Trigger & RLS RBAC',
                 detail:
-                  'Canvas #09090C, Level 1 Surface #13131A + 1dp #232330 border, Level 2 #1B1B25, 12% dynamic accent containers, 16dp/20dp/48dp touch grid, max-2-action cards with overflow menu, OmniEmptyState & OmniSkeletonCard.',
-                source: 'app/src/main/java/com/omniai/studio/ui/theme/DesignTokens.kt',
+                  'supabase/schema_and_rls.sql creates user_profiles (first signup = OWNER, others = PENDING), prevents non-OWNER role self-escalation, enforces <=256 KB gz: text-only omni_sync_records, and restricts VAULT_META to OWNER only.',
+                source: 'supabase/schema_and_rls.sql',
               },
               {
-                key: 'nav-shell',
-                title: 'v5.1 · Hub-and-Spoke Shell (4-Tab Bar + Slide-Out Drawer + Slim 56dp TopAppBar)',
+                key: 'google-oauth-pkce',
+                title: 'v5.5 · Pure OkHttp3 Google OAuth 2.0 PKCE (S256) & Deep-Link Auth',
                 detail:
-                  'Strictly 4 default tabs (Home, Chat, Studio, Projects), Hamburger Drawer grouped into Create & Media / Developer & Agents / System & Vault, Niche Switcher Sheet & pulsing Live Studio Activity Sheet.',
-                source: 'app/src/main/java/com/omniai/studio/ui/components/AppNavigationShell.kt',
+                  'SupabaseAuthManager.kt generates 64-char PKCE verifier + SHA-256 URL-safe Base64 challenge, opens system browser via Intent.ACTION_VIEW, captures omniaistudio://auth-callback in MainActivity, and auto-refreshes JWTs.',
+                source: 'app/src/main/java/com/omniai/studio/cloud/SupabaseAuthManager.kt',
               },
               {
-                key: 'home-bento',
-                title: 'v5.1 · Home Bento Command Dashboard',
+                key: 'gzip-delta-sync',
+                title: 'v5.5 · GZIP Text-Only Codec & Multi-Device LWW Delta Sync Engine',
                 detail:
-                  'Hero Active Niche + Next Suggested Video Episode with 1-tap "Auto-Type & Create", circular Kaggle GPU Quota ring (X/30h), Active Project diff & 1-tap Push, Quick AI Voice, Terminal & Recent Activity Strip.',
-                source: 'app/src/main/java/com/omniai/studio/ui/screens/HomeBentoScreen.kt',
+                  'PayloadGzipCodec.kt strips local media paths, compresses JSON (~70–85% savings) under a strict 256 KB cap with 1 MB decompression guard, and syncs via CloudSyncRepository + CloudSyncWorker (15m / 60m / Manual Wi-Fi).',
+                source: 'app/src/main/java/com/omniai/studio/cloud/CloudSyncRepository.kt',
               },
               {
-                key: 'chat-minimal',
-                title: 'v5.1 · Minimalist Chat + Zen Focus Mode + Plus (+) Sheet',
+                key: 'rbac-account-ui',
+                title: 'v5.5 · Cloud DB & Roles Admin Panel, Pending Gate & Viewer Guard',
                 detail:
-                  'Zen Focus Mode hides TopBar & BottomBar for distraction-free reading, rounded input capsule, Auto-Typer strip hidden when empty, and 2-row Plus (+) ModalBottomSheet housing OCR, Docs, URL, Incognito, Arena & Memory.',
-                source: 'app/src/main/java/com/omniai/studio/ui/screens/ChatStudioScreen.kt',
+                  'CloudAccountScreen.kt + RolePermissionGuard.kt enforce PendingApprovalLockScreen, Read-Only Viewer banners, Owner-Only Vault locks, and live Team & Device role management.',
+                source: 'app/src/main/java/com/omniai/studio/ui/screens/CloudAccountScreen.kt',
               },
               {
-                key: 'video-wizard',
-                title: 'v5.1 · 3-Step Video Studio Wizard & Render Settings Sheet',
+                key: 'adobe-native-bridge',
+                title: 'v5.4 · Native Adobe Express & Firefly Installed-App Bridge (Zero Browser)',
                 detail:
-                  'Segmented 1. Idea | 2. Scenes | 3. Render flow, compact summary pill opening Render Settings ModalBottomSheet, Audit Hook + YT/IG/FB SEO actions, Live Kaggle Stepper & Resumable Download progress card.',
-                source: 'app/src/main/java/com/omniai/studio/ui/screens/VideoDirectorScreen.kt',
-              },
-              {
-                key: 'projects-sticky',
-                title: 'v5.1 · Projects Hub: Sticky Git Auto-Push Pill & Full-Screen Code Editor',
-                detail:
-                  'Floating "Git Auto-Push (N changes)" pill when diffs exist, full-screen distraction-free monospace Code Editor with slim Save/Undo/Diff top bar, plus all v4.5 Kanban, AI Splitter & Actions Monitor tools.',
-                source: 'app/src/main/java/com/omniai/studio/ui/screens/ProjectDashboardScreen.kt',
+                  'AdobeAppBridge.kt resolves installed com.adobe.spark.post & com.adobe.firefly with API 30+ FLAG_ACTIVITY_REQUIRE_NON_BROWSER and FileProvider ACTION_SEND HD frame handoff.',
+                source: 'app/src/main/java/com/omniai/studio/media/AdobeAppBridge.kt',
               },
             ] as const
           ).map((item) => (
@@ -2777,7 +3326,7 @@ export const AndroidSimulatorView: React.FC<{ onInspectSource: (path: string) =>
                 onClick={() => onInspectSource(item.source)}
                 className="shrink-0 rounded-md border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-xs font-medium text-zinc-200 hover:border-emerald-500/50 hover:text-emerald-300 transition-colors whitespace-nowrap"
               >
-                Open Kotlin
+                Open Source
               </button>
             </div>
           ))}
@@ -2786,43 +3335,43 @@ export const AndroidSimulatorView: React.FC<{ onInspectSource: (path: string) =>
         <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-zinc-800 bg-[#0B0E14] px-4 py-3 text-xs text-zinc-400">
           <div className="flex items-center gap-2">
             <Lock className="h-4 w-4 text-emerald-400 shrink-0" />
-            <span>v5.1 Pure Compose Material 3 Refactor (Zero New Gradle Deps):</span>
+            <span>v5.5 Zero-New-Gradle-Deps Modules:</span>
           </div>
           <div className="flex flex-wrap items-center gap-3 shrink-0">
             <button
               type="button"
-              onClick={() => onInspectSource('app/src/main/java/com/omniai/studio/ui/theme/DesignTokens.kt')}
+              onClick={() => onInspectSource('supabase/schema_and_rls.sql')}
               className="font-mono text-emerald-400 hover:text-emerald-300 whitespace-nowrap"
             >
-              DesignTokens.kt
+              schema_and_rls.sql
             </button>
             <button
               type="button"
-              onClick={() => onInspectSource('app/src/main/java/com/omniai/studio/ui/components/AppNavigationShell.kt')}
+              onClick={() => onInspectSource('app/src/main/java/com/omniai/studio/cloud/SupabaseAuthManager.kt')}
               className="font-mono text-emerald-400 hover:text-emerald-300 whitespace-nowrap"
             >
-              AppNavigationShell.kt
+              SupabaseAuthManager.kt
             </button>
             <button
               type="button"
-              onClick={() => onInspectSource('app/src/main/java/com/omniai/studio/ui/screens/HomeBentoScreen.kt')}
+              onClick={() => onInspectSource('app/src/main/java/com/omniai/studio/cloud/PayloadGzipCodec.kt')}
               className="font-mono text-emerald-400 hover:text-emerald-300 whitespace-nowrap"
             >
-              HomeBentoScreen.kt
+              PayloadGzipCodec.kt
             </button>
             <button
               type="button"
-              onClick={() => onInspectSource('app/src/main/java/com/omniai/studio/ui/screens/VideoDirectorScreen.kt')}
+              onClick={() => onInspectSource('app/src/main/java/com/omniai/studio/cloud/CloudSyncRepository.kt')}
               className="font-mono text-emerald-400 hover:text-emerald-300 whitespace-nowrap"
             >
-              VideoDirectorScreen.kt
+              CloudSyncRepository.kt
             </button>
             <button
               type="button"
-              onClick={() => onInspectSource('app/src/main/java/com/omniai/studio/ui/screens/ProjectDashboardScreen.kt')}
+              onClick={() => onInspectSource('.github/workflows/keep-supabase-alive.yml')}
               className="font-mono text-emerald-400 hover:text-emerald-300 whitespace-nowrap"
             >
-              ProjectDashboardScreen.kt
+              keep-supabase-alive.yml
             </button>
           </div>
         </div>

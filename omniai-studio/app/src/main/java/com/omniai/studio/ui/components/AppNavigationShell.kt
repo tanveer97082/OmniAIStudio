@@ -1,5 +1,8 @@
 package com.omniai.studio.ui.components
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -8,6 +11,8 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -33,11 +38,14 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountTree
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.AdminPanelSettings
 import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material.icons.filled.ChatBubble
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.CloudSync
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.FolderSpecial
@@ -97,8 +105,10 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.omniai.studio.cloud.CloudUserRole
 import com.omniai.studio.data.local.NicheEntity
 import com.omniai.studio.settings.StudioTabId
+import com.omniai.studio.ui.screens.RoleGuardBanner
 import com.omniai.studio.ui.theme.AmberWarning
 import com.omniai.studio.ui.theme.CrimsonDanger
 import com.omniai.studio.ui.theme.EmeraldAccent
@@ -161,6 +171,7 @@ fun AppNavigationShell(
     val isAutoFillingNiche by viewModel.isAutoFillingNiche.collectAsState()
     val characterProfiles by viewModel.characterProfiles.collectAsState()
     val hashtagPacks by viewModel.hashtagPacks.collectAsState()
+    val youTubeProfiles by viewModel.youTubeProfiles.collectAsState()
     val workspaces by viewModel.workspaces.collectAsState()
     val activeWorkspaceId by viewModel.activeWorkspaceId.collectAsState()
 
@@ -173,9 +184,28 @@ fun AppNavigationShell(
     val rssFeeds by viewModel.rssFeeds.collectAsState()
     val newsDigests by viewModel.newsDigests.collectAsState()
     val localServers by viewModel.localServerCandidates.collectAsState()
+    val showAdobeReturnBanner by viewModel.showAdobeReturnBanner.collectAsState()
+    val awaitingAdobeSourceApp by viewModel.awaitingAdobeSourceApp.collectAsState()
+    val cloudRole by viewModel.cloudRole.collectAsState()
+    val lanWebServerState by viewModel.lanWebServerState.collectAsState()
+    val deviceHealth by viewModel.deviceHealth.collectAsState()
+
+    // v5.4 Seamless Return-to-App Adobe Thumbnail Import via Lifecycle ON_RESUME
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
+        viewModel.onAppResumedCheckAdobeReturn()
+    }
+
+    val adobeReturnPhotoPicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickVisualMedia()
+    ) { uri ->
+        if (uri != null) {
+            viewModel.attachPickedAdobeThumbnail(uri)
+        }
+    }
 
     var showNicheSheet by remember { mutableStateOf(false) }
     var showLiveJobsSheet by remember { mutableStateOf(false) }
+    var showLanStudioSheet by remember { mutableStateOf(false) }
     var showNicheEditorDialog by remember { mutableStateOf(false) }
     var editingNiche by remember { mutableStateOf<NicheEntity?>(null) }
 
@@ -184,12 +214,13 @@ fun AppNavigationShell(
     }
     val isActionsActive = actionsState.isWatching || actionsState.status in setOf("QUEUED", "IN_PROGRESS")
     val onlineLanCount = remember(localServers) { localServers.count { it.isOnline } }
-    val hasLiveActivity = activeRenderJobs.isNotEmpty() || isActionsActive || isTerminalRunning || onlineLanCount > 0 || isNetlogEnabled
+    val hasLiveActivity = activeRenderJobs.isNotEmpty() || isActionsActive || isTerminalRunning || onlineLanCount > 0 || lanWebServerState.isRunning || isNetlogEnabled
 
-    val liveSummaryLabel = remember(activeRenderJobs.size, isActionsActive, isTerminalRunning, onlineLanCount) {
+    val liveSummaryLabel = remember(activeRenderJobs.size, isActionsActive, isTerminalRunning, onlineLanCount, lanWebServerState.isRunning) {
         when {
             activeRenderJobs.isNotEmpty() -> "GPU ${activeRenderJobs.size}"
             isActionsActive -> "CI Live"
+            lanWebServerState.isRunning -> "LAN ON"
             isTerminalRunning -> "Shell"
             onlineLanCount > 0 -> "LAN $onlineLanCount"
             else -> "Live"
@@ -242,7 +273,7 @@ fun AppNavigationShell(
                                     overflow = TextOverflow.Ellipsis
                                 )
                                 Text(
-                                    text = "Hub & Power Tools · v5.1",
+                                    text = "Hub & Power Tools · v5.5",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = colorScheme.onSurfaceVariant
                                 )
@@ -372,13 +403,16 @@ fun AppNavigationShell(
                     DrawerToolItem(
                         label = "Local Wi-Fi Web Studio",
                         icon = Icons.Filled.Wifi,
-                        badgeText = onlineLanCount.takeIf { it > 0 }?.let { "$it ON" },
-                        selected = false,
+                        badgeText = when {
+                            lanWebServerState.isRunning -> "LIVE"
+                            onlineLanCount > 0 -> "$onlineLanCount ON"
+                            else -> null
+                        },
+                        selected = lanWebServerState.isRunning,
                         onClick = {
                             closeDrawerAnd {
-                                viewModel.scanLocalhostPorts()
-                                onOpenOverlay("NONE")
-                                onSelectTab(StudioTabId.VAULT)
+                                viewModel.refreshDeviceHealth()
+                                showLanStudioSheet = true
                             }
                         }
                     )
@@ -404,6 +438,13 @@ fun AppNavigationShell(
 
                     // GROUP 3: System & Vault
                     DrawerGroupHeader("System & Vault")
+                    DrawerToolItem(
+                        label = "Cloud DB & Roles",
+                        icon = Icons.Filled.AdminPanelSettings,
+                        badgeText = cloudRole.badgeText,
+                        selected = activeOverlay == "CLOUD_ACCOUNT",
+                        onClick = { closeDrawerAnd { onOpenOverlay("CLOUD_ACCOUNT") } }
+                    )
                     DrawerToolItem(
                         label = "API Vault & Multi-Key Pool",
                         icon = Icons.Filled.Security,
@@ -447,16 +488,25 @@ fun AppNavigationShell(
                     enter = fadeIn(),
                     exit = fadeOut()
                 ) {
-                    SlimStudioTopBar(
-                        activeNiche = activeNiche,
-                        filterAllNiches = filterAllNiches,
-                        hasLiveActivity = hasLiveActivity,
-                        liveSummaryLabel = liveSummaryLabel,
-                        onOpenDrawer = { scope.launch { drawerState.open() } },
-                        onOpenNicheSheet = { showNicheSheet = true },
-                        onOpenCommandPalette = onOpenCommandPalette,
-                        onOpenLiveJobsSheet = { showLiveJobsSheet = true }
-                    )
+                    Column {
+                        SlimStudioTopBar(
+                            activeNiche = activeNiche,
+                            filterAllNiches = filterAllNiches,
+                            hasLiveActivity = hasLiveActivity,
+                            liveSummaryLabel = liveSummaryLabel,
+                            onOpenDrawer = { scope.launch { drawerState.open() } },
+                            onOpenNicheSheet = { showNicheSheet = true },
+                            onOpenCommandPalette = onOpenCommandPalette,
+                            onOpenLiveJobsSheet = { showLiveJobsSheet = true }
+                        )
+                        if (cloudRole == CloudUserRole.VIEWER) {
+                            RoleGuardBanner(
+                                role = cloudRole,
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+                                onOpenCloudRoles = { onOpenOverlay("CLOUD_ACCOUNT") }
+                            )
+                        }
+                    }
                 }
             },
             bottomBar = {
@@ -466,6 +516,70 @@ fun AppNavigationShell(
                     exit = fadeOut()
                 ) {
                     Column {
+                        AnimatedVisibility(
+                            visible = showAdobeReturnBanner,
+                            enter = fadeIn(),
+                            exit = fadeOut()
+                        ) {
+                            Surface(
+                                color = EmeraldAccent.copy(alpha = 0.16f),
+                                border = BorderStroke(1.dp, EmeraldAccent.copy(alpha = 0.65f)),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 12.dp, vertical = 6.dp),
+                                shape = RoundedCornerShape(14.dp)
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Filled.Image,
+                                        contentDescription = null,
+                                        tint = EmeraldAccent,
+                                        modifier = Modifier.size(22.dp)
+                                    )
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = "Back from ${awaitingAdobeSourceApp.ifBlank { "Adobe" }}!",
+                                            style = MaterialTheme.typography.labelLarge,
+                                            fontWeight = FontWeight.Bold,
+                                            color = EmeraldAccent
+                                        )
+                                        Text(
+                                            text = "Pick your exported thumbnail to attach to YouTube",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = colorScheme.onSurface
+                                        )
+                                    }
+                                    Button(
+                                        onClick = {
+                                            adobeReturnPhotoPicker.launch(
+                                                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                                            )
+                                        },
+                                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                                        shape = RoundedCornerShape(10.dp)
+                                    ) {
+                                        Text("Pick", style = MaterialTheme.typography.labelMedium)
+                                    }
+                                    IconButton(
+                                        onClick = { viewModel.dismissAdobeReturnBanner() },
+                                        modifier = Modifier.size(28.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Filled.Close,
+                                            contentDescription = "Dismiss Adobe return banner",
+                                            tint = colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    }
+                                }
+                            }
+                        }
                         HorizontalDivider(color = colorScheme.outline, thickness = OmniDesignTokens.BorderWidth)
                         NavigationBar(
                             containerColor = colorScheme.surface,
@@ -787,11 +901,11 @@ fun AppNavigationShell(
                         }
                     }
 
-                    if (onlineLanCount > 0) {
+                    if (onlineLanCount > 0 || lanWebServerState.isRunning) {
                         OmniSurfaceCard(
                             onClick = {
                                 showLiveJobsSheet = false
-                                onSelectTab(StudioTabId.VAULT)
+                                showLanStudioSheet = true
                             }
                         ) {
                             Row(
@@ -799,10 +913,42 @@ fun AppNavigationShell(
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Text("Local Wi-Fi / Localhost Studio", style = MaterialTheme.typography.titleSmall)
-                                OmniAccentBadge(text = "$onlineLanCount ONLINE", accent = EmeraldAccent)
+                                Text("Local Wi-Fi Web Studio", style = MaterialTheme.typography.titleSmall)
+                                OmniAccentBadge(
+                                    text = if (lanWebServerState.isRunning) "PIN ${lanWebServerState.accessPin}" else "$onlineLanCount ONLINE",
+                                    accent = EmeraldAccent
+                                )
+                            }
+                            if (lanWebServerState.isRunning) {
+                                Text(
+                                    text = "${lanWebServerState.url} · ${lanWebServerState.servedRequests} request(s)",
+                                    fontFamily = FontFamily.Monospace,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = colorScheme.onSurfaceVariant
+                                )
                             }
                         }
+                    }
+
+                    // v5.0 Device Health Snapshot Card
+                    OmniSurfaceCard {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text("Device Thermal & Storage Guard", style = MaterialTheme.typography.titleSmall)
+                            OmniAccentBadge(
+                                text = deviceHealth.thermalLevel.label,
+                                accent = if (deviceHealth.isSafeForHeavyMediaJob) EmeraldAccent else AmberWarning
+                            )
+                        }
+                        Text(
+                            text = "Battery ${deviceHealth.batteryPercent}% · Free ${deviceHealth.freeStorageMb} MB · RAM ${deviceHealth.availableRamMb} MB",
+                            fontFamily = FontFamily.Monospace,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = colorScheme.onSurfaceVariant
+                        )
                     }
                 }
 
@@ -819,11 +965,123 @@ fun AppNavigationShell(
         }
     }
 
+    // v5.0 Local Wi-Fi LAN Web Studio Control ModalBottomSheet
+    if (showLanStudioSheet) {
+        val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+        ModalBottomSheet(
+            onDismissRequest = { showLanStudioSheet = false },
+            sheetState = sheetState,
+            containerColor = colorScheme.surfaceVariant,
+            dragHandle = { BottomSheetDefaults.DragHandle(color = colorScheme.outline) }
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = OmniDesignTokens.ScreenHorizontalPadding)
+                    .padding(bottom = 24.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Local Wi-Fi Web Studio",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = "Zero-dependency ServerSocket LAN bridge with 6-digit pairing PIN",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = colorScheme.onSurfaceVariant
+                        )
+                    }
+                    OmniAccentBadge(
+                        text = if (lanWebServerState.isRunning) "LIVE" else "OFFLINE",
+                        accent = if (lanWebServerState.isRunning) EmeraldAccent else colorScheme.onSurfaceVariant
+                    )
+                }
+
+                OmniSurfaceCard {
+                    if (lanWebServerState.isRunning) {
+                        Text(
+                            text = "Open in any desktop browser on the same Wi-Fi:",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            text = lanWebServerState.url,
+                            fontFamily = FontFamily.Monospace,
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = EmeraldAccent
+                        )
+                        Text(
+                            text = "6-Digit Pairing PIN: ${lanWebServerState.accessPin} · Requests: ${lanWebServerState.servedRequests}",
+                            fontFamily = FontFamily.Monospace,
+                            style = MaterialTheme.typography.labelMedium,
+                            color = colorScheme.onSurface
+                        )
+                    } else {
+                        Text(
+                            text = "Start the built-in LAN server to browse chats, video scripts, and projects from your PC over local Wi-Fi without cloud uploads.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = colorScheme.onSurfaceVariant
+                        )
+                    }
+                    lanWebServerState.lastError?.let { err ->
+                        Text(
+                            text = err,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = CrimsonDanger
+                        )
+                    }
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Button(
+                        onClick = {
+                            if (lanWebServerState.isRunning) {
+                                viewModel.stopLanWebServer()
+                            } else {
+                                viewModel.startLanWebServer()
+                            }
+                        },
+                        modifier = Modifier
+                            .weight(1f)
+                            .defaultMinSize(minHeight = OmniDesignTokens.MinTouchTarget),
+                        shape = RoundedCornerShape(OmniDesignTokens.ChipRadius)
+                    ) {
+                        Text(if (lanWebServerState.isRunning) "Stop LAN Server" else "Start LAN Server")
+                    }
+                    OutlinedButton(
+                        onClick = {
+                            showLanStudioSheet = false
+                            viewModel.scanLocalhostPorts()
+                            onOpenOverlay("NONE")
+                            onSelectTab(StudioTabId.VAULT)
+                        },
+                        modifier = Modifier.defaultMinSize(minHeight = OmniDesignTokens.MinTouchTarget),
+                        shape = RoundedCornerShape(OmniDesignTokens.ChipRadius)
+                    ) {
+                        Text("Port Scan")
+                    }
+                }
+            }
+        }
+    }
+
     if (showNicheEditorDialog) {
         NicheEditorDialog(
             initialNiche = editingNiche,
             characters = characterProfiles,
             hashtagPacks = hashtagPacks,
+            youtubeProfiles = youTubeProfiles,
             isAutoFilling = isAutoFillingNiche,
             onAutoFillBlueprint = { name, onResult -> viewModel.aiAutoFillNicheBlueprint(name, onResult) },
             onCompressMemoryNow = { id -> viewModel.compressNicheMemoryNow(id) },

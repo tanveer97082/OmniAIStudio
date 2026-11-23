@@ -289,6 +289,7 @@ data class VideoScriptEntity(
     val styleTag: String = "Cinematic Realism",
     val status: String = "DRAFT", // "DRAFT" | "SCRIPTED" | "RENDERING" | "RENDERED" | "PUBLISHED"
     val linkedVideoPath: String = "",
+    val thumbnailPath: String = "",
     val seamlessLoop: Boolean = false,
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis()
@@ -434,6 +435,7 @@ data class NicheEntity(
     val defaultAspectRatio: String = "9:16",
     val linkedCharacterId: Long? = null,
     val linkedHashtagPackId: Long? = null,
+    val linkedYoutubeProfileId: String = "",
     val rollingChatSummary: String = "",
     val lastSummarizedMessageCount: Int = 0,
     val episodeCount: Int = 0,
@@ -609,4 +611,26 @@ data class GitCommitLogEntity(
     val errorLog: String = "",
     val timestamp: Long = System.currentTimeMillis()
 )
+
+// =========================================================================
+// v5.3 YOUTUBE DATA API v3 DAILY QUOTA TRACKING
+// =========================================================================
+
+@Entity(
+    tableName = "youtube_quota_logs",
+    indices = [
+        Index("dateKey"),
+        Index("createdAt")
+    ]
+)
+data class YouTubeQuotaEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0L,
+    val dateKey: String, // yyyy-MM-dd (UTC / local quota window)
+    val unitsUsed: Int,
+    val actionLabel: String, // e.g. "VIDEO_UPLOAD", "THUMBNAIL_SET", "COMMENT_POST", "ANALYTICS_READ"
+    val videoId: String = "",
+    val channelLabel: String = "",
+    val createdAt: Long = System.currentTimeMillis()
+)
+
 

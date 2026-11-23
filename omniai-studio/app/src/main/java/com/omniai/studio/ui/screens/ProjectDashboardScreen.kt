@@ -90,6 +90,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.omniai.studio.data.local.ProjectEntity
 import com.omniai.studio.data.local.ProjectTaskEntity
+import com.omniai.studio.data.remote.GitDiffResult
+import com.omniai.studio.git.SecretScanReport
 import com.omniai.studio.media.StorageGalleryHelper
 import com.omniai.studio.projects.AiMultiFileSplitter
 import com.omniai.studio.ui.theme.AmberWarning
@@ -141,6 +143,8 @@ fun ProjectDashboardScreen(
     val isGeneratingCommitMsg by viewModel.isGeneratingCommitMsg.collectAsState()
     val actionsState by viewModel.actionsMonitorState.collectAsState()
     val isDownloadingActionsApk by viewModel.isDownloadingActionsApk.collectAsState()
+    val lastBuildDiagnosis by viewModel.lastBuildDiagnosis.collectAsState()
+    val isRunningBuildDoctor by viewModel.isRunningBuildDoctor.collectAsState()
     val niches by viewModel.niches.collectAsState()
     val videoScripts by viewModel.videoScriptsWithRelations.collectAsState()
     val chatThreads by viewModel.allWorkspaceChatThreads.collectAsState()
@@ -166,11 +170,15 @@ fun ProjectDashboardScreen(
     var showSplitterDialog by remember { mutableStateOf(false) }
     var splitterInputText by remember { mutableStateOf("") }
 
-    // Git & Private Repo state
+    // Git, Pre-Push Diff Review & Private Repo state
     var commitMessageInput by remember { mutableStateOf("") }
     var showCreateRepoDialog by remember { mutableStateOf(false) }
     var newRepoNameInput by remember { mutableStateOf("") }
     var newRepoDescInput by remember { mutableStateOf("") }
+    var showDiffReviewDialog by remember { mutableStateOf(false) }
+    var reviewDiffSnapshot by remember { mutableStateOf(GitDiffResult()) }
+    var reviewPreviewFiles by remember { mutableStateOf<List<DiffPreviewFile>>(emptyList()) }
+    var reviewSecretReport by remember { mutableStateOf(SecretScanReport()) }
 
     // Notes editor state
     var notesDraft by remember(activeProject?.id) { mutableStateOf(activeProject?.notes.orEmpty()) }
@@ -933,7 +941,14 @@ fun ProjectDashboardScreen(
                                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                                     ) {
                                         Button(
-                                            onClick = { viewModel.pushProjectAtomically(proj, commitMessageInput) },
+                                            onClick = {
+                                                viewModel.prepareProjectDiffReview(proj) { diff, previews, secretReport ->
+                                                    reviewDiffSnapshot = diff
+                                                    reviewPreviewFiles = previews
+                                                    reviewSecretReport = secretReport
+                                                    showDiffReviewDialog = true
+                                                }
+                                            },
                                             enabled = !isGitBusy,
                                             modifier = Modifier
                                                 .weight(1f)
@@ -1083,6 +1098,49 @@ fun ProjectDashboardScreen(
                                                     color = CrimsonDanger,
                                                     modifier = Modifier.padding(8.dp)
                                                 )
+                                            }
+                                        }
+                                        if (actionsState.runId > 0L && proj.githubOwner.isNotBlank() && proj.githubRepo.isNotBlank()) {
+                                            Button(
+                                                onClick = {
+                                                    viewModel.runAiBuildDoctor(
+                                                        owner = proj.githubOwner,
+                                                        repo = proj.githubRepo,
+                                                        runId = actionsState.runId
+                                                    )
+                                                },
+                                                enabled = !isRunningBuildDoctor,
+                                                modifier = Modifier.fillMaxWidth(),
+                                                shape = RoundedCornerShape(OmniDesignTokens.ChipRadius)
+                                            ) {
+                                                Icon(Icons.Filled.AutoAwesome, contentDescription = null)
+                                                Spacer(modifier = Modifier.width(6.dp))
+                                                Text(if (isRunningBuildDoctor) "Diagnosing Build Logs..." else "Run AI Build Doctor")
+                                            }
+                                        }
+                                        lastBuildDiagnosis?.let { diag ->
+                                            Surface(
+                                                color = colorScheme.surfaceVariant,
+                                                border = BorderStroke(1.dp, primaryColor.omniAccentBorder()),
+                                                shape = RoundedCornerShape(8.dp),
+                                                modifier = Modifier.fillMaxWidth()
+                                            ) {
+                                                Column(
+                                                    modifier = Modifier.padding(10.dp),
+                                                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                                                ) {
+                                                    Text(
+                                                        text = "AI Build Doctor (${diag.providerTag}) · ${diag.failedJobName}",
+                                                        style = MaterialTheme.typography.labelMedium,
+                                                        fontWeight = FontWeight.Bold,
+                                                        color = primaryColor
+                                                    )
+                                                    Text(
+                                                        text = diag.aiDiagnosisMarkdown,
+                                                        style = MaterialTheme.typography.bodySmall,
+                                                        color = colorScheme.onSurface
+                                                    )
+                                                }
                                             }
                                         }
                                         if (actionsState.htmlUrl.isNotBlank()) {
@@ -1622,6 +1680,24 @@ fun ProjectDashboardScreen(
             dismissButton = {
                 OutlinedButton(onClick = { showCreateRepoDialog = false }) { Text("Cancel") }
             }
+        )
+    }
+
+    if (showDiffReviewDialog && activeProject != null) {
+        val targetProj = activeProject!!
+        DiffReviewDialog(
+            projectName = targetProj.name,
+            branchName = targetProj.githubBranch.ifBlank { "main" },
+            commitMessage = commitMessageInput,
+            diff = reviewDiffSnapshot,
+            previewFiles = reviewPreviewFiles,
+            secretReport = reviewSecretReport,
+            isPushing = isGitBusy,
+            onConfirmPush = {
+                showDiffReviewDialog = false
+                viewModel.pushProjectAtomically(targetProj, commitMessageInput)
+            },
+            onDismiss = { showDiffReviewDialog = false }
         )
     }
 }

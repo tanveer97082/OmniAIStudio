@@ -25,12 +25,14 @@ import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.BookmarkBorder
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.CloudUpload
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.Forum
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.PushPin
@@ -81,6 +83,7 @@ import com.omniai.studio.ui.theme.CrimsonDanger
 import com.omniai.studio.ui.theme.EmeraldAccent
 import com.omniai.studio.ui.theme.LocalUiConfig
 import com.omniai.studio.viewmodel.OmniAiViewModel
+import com.omniai.studio.youtube.CommentAssistantSheet
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Calendar
@@ -123,6 +126,15 @@ fun ContentHubScreen(
     val filterAllNiches by viewModel.filterAllNiches.collectAsState()
     val isAutoFillingNiche by viewModel.isAutoFillingNiche.collectAsState()
     val characterProfiles by viewModel.characterProfiles.collectAsState()
+    val youTubeProfiles by viewModel.youTubeProfiles.collectAsState()
+    val downloads by viewModel.downloads.collectAsState()
+    val appSettings by viewModel.appSettings.collectAsState()
+    val isUploadingToYouTube by viewModel.isUploadingToYouTube.collectAsState()
+    val youTubeUploadProgress by viewModel.youTubeUploadProgress.collectAsState()
+    val youTubeUploadStatus by viewModel.youTubeUploadStatus.collectAsState()
+    val youTubeComments by viewModel.youTubeComments.collectAsState()
+    val isLoadingYouTubeComments by viewModel.isLoadingYouTubeComments.collectAsState()
+    val youTubeCommentStatus by viewModel.youTubeCommentStatus.collectAsState()
 
     val allWorkspaceThreads = remember(rawWorkspaceThreads, activeNiche?.id, filterAllNiches) {
         if (filterAllNiches || activeNiche == null) rawWorkspaceThreads
@@ -158,9 +170,11 @@ fun ContentHubScreen(
     var showNewScriptDialog by remember { mutableStateOf(false) }
     var addSceneForScriptId by remember { mutableStateOf<Long?>(null) }
 
-    // Hashtag pack dialog
+    // Hashtag pack & v5.3 Comment Assistant dialogs
     var showNewPackDialog by remember { mutableStateOf(false) }
     var showScheduleDialog by remember { mutableStateOf(false) }
+    var showCommentAssistantSheet by remember { mutableStateOf(false) }
+    var commentAssistantVideoId by remember { mutableStateOf("") }
 
     // Handle deep link from PublishReminderWorker notification
     LaunchedEffect(pendingOpenSocialPostId, allSocialPosts) {
@@ -1217,6 +1231,71 @@ fun ContentHubScreen(
                                     }
                                 }
 
+                                // v5.3 Direct YouTube Data API v3 Upload + AI Comment Reply Assistant
+                                if (selectedPlatform == "YOUTUBE") {
+                                    HorizontalDivider(color = colorScheme.outline)
+                                    val latestMp4 = downloads.firstOrNull { it.status == "COMPLETED" }
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        Button(
+                                            enabled = !isUploadingToYouTube && latestMp4 != null,
+                                            onClick = {
+                                                val targetFile = latestMp4?.filePath ?: return@Button
+                                                val fullDesc = buildString {
+                                                    if (hookInput.isNotBlank()) appendLine(hookInput)
+                                                    if (descInput.isNotBlank()) appendLine(descInput)
+                                                    if (ctaInput.isNotBlank()) appendLine("\n$ctaInput")
+                                                    if (tagsInput.isNotBlank()) appendLine("\n$tagsInput")
+                                                }.trim()
+                                                val tagList = tagsInput
+                                                    .split(Regex("[\\s,]+"))
+                                                    .map { it.trim().removePrefix("#") }
+                                                    .filter { it.isNotBlank() }
+                                                viewModel.uploadVideoToYouTube(
+                                                    videoFilePath = targetFile,
+                                                    title = titleInput.ifBlank { activeScriptBundle?.script?.title ?: "OmniAI Video" },
+                                                    description = fullDesc,
+                                                    tags = tagList,
+                                                    firstComment = pinnedInput,
+                                                    privacyStatus = appSettings.youtubeDefaultPrivacy,
+                                                    socialPostId = currentPost?.id
+                                                )
+                                            },
+                                            modifier = Modifier.weight(1f)
+                                        ) {
+                                            Icon(Icons.Filled.CloudUpload, contentDescription = null)
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                            Text(if (isUploadingToYouTube) "Uploading $youTubeUploadProgress%" else "Direct Upload YT")
+                                        }
+                                        OutlinedButton(
+                                            onClick = {
+                                                commentAssistantVideoId = publishedUrlInput.trim()
+                                                showCommentAssistantSheet = true
+                                            },
+                                            modifier = Modifier.weight(1f)
+                                        ) {
+                                            Icon(Icons.Filled.Forum, contentDescription = null)
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                            Text("Comment AI")
+                                        }
+                                    }
+                                    if (isUploadingToYouTube) {
+                                        LinearProgressIndicator(
+                                            progress = { (youTubeUploadProgress / 100f).coerceIn(0f, 1f) },
+                                            modifier = Modifier.fillMaxWidth()
+                                        )
+                                    }
+                                    if (youTubeUploadStatus.isNotBlank()) {
+                                        Text(
+                                            text = youTubeUploadStatus,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = EmeraldAccent
+                                        )
+                                    }
+                                }
+
                                 HorizontalDivider(color = colorScheme.outline)
 
                                 // Human-in-the-Loop Posting Reminder Scheduler
@@ -1621,6 +1700,7 @@ fun ContentHubScreen(
             initialNiche = editingNiche,
             characters = characterProfiles,
             hashtagPacks = hashtagPacks,
+            youtubeProfiles = youTubeProfiles,
             isAutoFilling = isAutoFillingNiche,
             onAutoFillBlueprint = { name, onResult -> viewModel.aiAutoFillNicheBlueprint(name, onResult) },
             onCompressMemoryNow = { id -> viewModel.compressNicheMemoryNow(id) },
@@ -1633,6 +1713,25 @@ fun ContentHubScreen(
                 showNicheEditorDialog = false
             },
             onDismiss = { showNicheEditorDialog = false }
+        )
+    }
+
+    if (showCommentAssistantSheet) {
+        CommentAssistantSheet(
+            initialVideoId = commentAssistantVideoId,
+            comments = youTubeComments,
+            isLoading = isLoadingYouTubeComments,
+            statusMessage = youTubeCommentStatus,
+            onFetchComments = { videoIdOrUrl, onlyUnanswered ->
+                viewModel.fetchYouTubeComments(videoIdOrUrl, onlyUnanswered)
+            },
+            onGenerateAiDraft = { comment, onReady ->
+                viewModel.generateAiCommentReplyDraft(comment, onReady)
+            },
+            onPostReply = { comment, replyText ->
+                viewModel.postYouTubeCommentReply(comment, replyText)
+            },
+            onDismiss = { showCommentAssistantSheet = false }
         )
     }
 }

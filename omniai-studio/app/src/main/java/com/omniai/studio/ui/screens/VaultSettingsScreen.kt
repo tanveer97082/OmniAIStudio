@@ -20,6 +20,8 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.AdminPanelSettings
+import androidx.compose.material.icons.filled.AutoFixHigh
 import androidx.compose.material.icons.filled.CloudSync
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.ContentCopy
@@ -32,6 +34,7 @@ import androidx.compose.material.icons.filled.OpenInBrowser
 import androidx.compose.material.icons.filled.Radar
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material.icons.filled.Visibility
@@ -69,6 +72,9 @@ import com.omniai.studio.media.StorageGalleryHelper
 import com.omniai.studio.security.AutoLockTimeout
 import com.omniai.studio.security.BiometricAuthManager
 import com.omniai.studio.security.VaultManager
+import com.omniai.studio.ui.guides.PlatformGuideBottomSheet
+import com.omniai.studio.ui.guides.PlatformGuideId
+import com.omniai.studio.ui.guides.PlatformGuideTriggerButton
 import com.omniai.studio.ui.theme.AmberWarning
 import com.omniai.studio.ui.theme.AmoledBlack
 import com.omniai.studio.ui.theme.AmoledBorder
@@ -99,10 +105,14 @@ fun VaultSettingsScreen(
     biometricManager: BiometricAuthManager,
     viewModel: OmniAiViewModel,
     onOpenSettingsHub: () -> Unit = {},
-    onOpenBackupCenter: () -> Unit = {}
+    onOpenBackupCenter: () -> Unit = {},
+    onOpenCloudAccount: () -> Unit = {},
+    onRunGuideCommandInTerminal: (String) -> Unit = {}
 ) {
     val clipboard = LocalClipboardManager.current
     val snapshot by viewModel.vaultSnapshot.collectAsState()
+    val cloudRole by viewModel.cloudRole.collectAsState()
+    val roleCapabilities by viewModel.roleCapabilities.collectAsState()
     val pingResults by viewModel.pingResults.collectAsState()
     val isPinging by viewModel.isPinging.collectAsState()
     val otaState by viewModel.otaState.collectAsState()
@@ -113,14 +123,23 @@ fun VaultSettingsScreen(
     val tunnelWatchdogEnabled by viewModel.tunnelWatchdogEnabled.collectAsState()
     val remoteWorkerSource by viewModel.remoteWorkerSource.collectAsState()
     val isRemoteWorkerBusy by viewModel.isRemoteWorkerBusy.collectAsState()
+    val isDetectingTgChatId by viewModel.isDetectingTelegramChatId.collectAsState()
+    val isBackupBusy by viewModel.isBackupCenterBusy.collectAsState()
+    val youTubeProfiles by viewModel.youTubeProfiles.collectAsState()
+    val activeYouTubeProfileId by viewModel.activeYouTubeProfileId.collectAsState()
 
     var draft by remember(snapshot) { mutableStateOf(snapshot) }
     var secretsUnlocked by remember { mutableStateOf(false) }
     var urlError by remember { mutableStateOf<String?>(null) }
+    var activeGuideId by remember { mutableStateOf<PlatformGuideId?>(null) }
 
     var poolLabel by remember { mutableStateOf("") }
     var poolUsername by remember { mutableStateOf("") }
     var poolApiKey by remember { mutableStateOf("") }
+    var ytProfileLabel by remember { mutableStateOf("") }
+    var ytProfileClientId by remember { mutableStateOf("") }
+    var ytProfileClientSecret by remember { mutableStateOf("") }
+    var ytProfileRefreshToken by remember { mutableStateOf("") }
     var workerCommitMsg by remember { mutableStateOf("Update video_worker.py from OmniAI-Studio Android") }
 
     var backupPassword by remember { mutableStateOf("") }
@@ -181,21 +200,106 @@ fun VaultSettingsScreen(
                         color = TextSecondary
                     )
                 }
-                OutlinedButton(onClick = {
-                    if (secretsUnlocked) {
-                        secretsUnlocked = false
-                    } else {
-                        requireBiometricThen("Verify to reveal & edit API credentials") {
-                            secretsUnlocked = true
+                OutlinedButton(
+                    onClick = {
+                        if (secretsUnlocked) {
+                            secretsUnlocked = false
+                        } else {
+                            requireBiometricThen("Verify to reveal & edit API credentials") {
+                                secretsUnlocked = true
+                            }
                         }
-                    }
-                }) {
+                    },
+                    enabled = roleCapabilities.canWriteVault
+                ) {
                     Icon(
                         if (secretsUnlocked) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
                         contentDescription = null
                     )
                     Spacer(modifier = Modifier.width(6.dp))
-                    Text(if (secretsUnlocked) "Mask Keys" else "Reveal")
+                    Text(if (!roleCapabilities.canWriteVault) "Owner Only" else if (secretsUnlocked) "Mask Keys" else "Reveal")
+                }
+            }
+        }
+
+        item {
+            RoleGuardBanner(
+                role = cloudRole,
+                onOpenCloudRoles = onOpenCloudAccount
+            )
+        }
+
+        // v5.5 Supabase PostgreSQL Cloud DB, Google OAuth PKCE & Server-Enforced RBAC Card
+        item {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = AmoledSurface),
+                border = BorderStroke(1.dp, AmoledBorder)
+            ) {
+                Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Supabase PostgreSQL Cloud DB & RBAC", style = MaterialTheme.typography.titleMedium)
+                            Text(
+                                "Compressed text-only delta sync (<=256 KB/row) · Role: ${cloudRole.badgeText}",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = TextSecondary
+                            )
+                        }
+                        PlatformGuideTriggerButton(
+                            onClick = { activeGuideId = PlatformGuideId.SUPABASE_CLOUD }
+                        )
+                    }
+
+                    OutlinedTextField(
+                        value = draft.supabaseUrl,
+                        onValueChange = { draft = draft.copy(supabaseUrl = it) },
+                        label = { Text("SUPABASE_URL (https://<project-ref>.supabase.co)") },
+                        singleLine = true,
+                        enabled = roleCapabilities.canWriteVault,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    SecretVaultField(
+                        label = "SUPABASE_ANON_KEY (Public Anon Key)",
+                        value = draft.supabaseAnonKey,
+                        unlocked = secretsUnlocked && roleCapabilities.canWriteVault,
+                        onValueChange = { draft = draft.copy(supabaseAnonKey = it) },
+                        onCopy = {
+                            requireBiometricThen("Authenticate to copy SUPABASE_ANON_KEY") {
+                                clipboard.setText(AnnotatedString(draft.supabaseAnonKey))
+                                viewModel.postToast("Copied SUPABASE_ANON_KEY.")
+                            }
+                        }
+                    )
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Button(
+                            onClick = {
+                                viewModel.saveSupabaseConfig(draft.supabaseUrl, draft.supabaseAnonKey)
+                            },
+                            enabled = roleCapabilities.canWriteVault,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(Icons.Filled.Save, contentDescription = null)
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(if (roleCapabilities.canWriteVault) "Save Supabase" else "Owner Only")
+                        }
+                        OutlinedButton(
+                            onClick = onOpenCloudAccount,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(Icons.Filled.AdminPanelSettings, contentDescription = null)
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Cloud DB & Roles")
+                        }
+                    }
                 }
             }
         }
@@ -276,6 +380,18 @@ fun VaultSettingsScreen(
                         }
                     }
 
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("Groq / OpenRouter / Local Presets", style = MaterialTheme.typography.labelMedium, color = TextSecondary)
+                        PlatformGuideTriggerButton(
+                            label = "? Groq / OpenRouter Guide",
+                            onClick = { activeGuideId = PlatformGuideId.GROQ_OPENROUTER }
+                        )
+                    }
+
                     LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         items(QUICK_PROVIDER_PRESETS) { preset ->
                             FilterChip(
@@ -291,6 +407,18 @@ fun VaultSettingsScreen(
                                 label = { Text(preset.label, maxLines = 1) }
                             )
                         }
+                    }
+
+                    HorizontalDivider(color = AmoledBorder)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("1. Uncensored AI (Colab / Termux)", style = MaterialTheme.typography.titleSmall)
+                        PlatformGuideTriggerButton(
+                            onClick = { activeGuideId = PlatformGuideId.UNCENSORED_TUNNEL }
+                        )
                     }
 
                     OutlinedTextField(
@@ -325,6 +453,18 @@ fun VaultSettingsScreen(
                         singleLine = true
                     )
 
+                    HorizontalDivider(color = AmoledBorder)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("2. Hugging Face Serverless", style = MaterialTheme.typography.titleSmall)
+                        PlatformGuideTriggerButton(
+                            onClick = { activeGuideId = PlatformGuideId.HUGGING_FACE }
+                        )
+                    }
+
                     SecretVaultField(
                         label = "Secondary Hugging Face Token",
                         value = draft.huggingFaceToken,
@@ -355,8 +495,20 @@ fun VaultSettingsScreen(
                         Text("Browse HF Models (Downloads · GGUF)")
                     }
 
+                    HorizontalDivider(color = AmoledBorder)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("3. Google Gemini API & Pool", style = MaterialTheme.typography.titleSmall)
+                        PlatformGuideTriggerButton(
+                            onClick = { activeGuideId = PlatformGuideId.GEMINI }
+                        )
+                    }
+
                     SecretVaultField(
-                        label = "Tertiary Gemini 2.5 Flash Key",
+                        label = "Tertiary Gemini 2.5 Flash Key (Comma-Separated Pool OK)",
                         value = draft.geminiApiKey,
                         unlocked = secretsUnlocked,
                         onValueChange = { draft = draft.copy(geminiApiKey = it) },
@@ -381,7 +533,16 @@ fun VaultSettingsScreen(
                     }
 
                     HorizontalDivider(color = AmoledBorder)
-                    Text("Kaggle Dual-GPU & GitHub OTA", style = MaterialTheme.typography.titleMedium)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("4. Kaggle T4 x2 GPU Worker", style = MaterialTheme.typography.titleSmall)
+                        PlatformGuideTriggerButton(
+                            onClick = { activeGuideId = PlatformGuideId.KAGGLE_WORKER }
+                        )
+                    }
 
                     OutlinedTextField(
                         value = draft.kaggleUsername,
@@ -404,6 +565,18 @@ fun VaultSettingsScreen(
                         }
                     )
 
+                    HorizontalDivider(color = AmoledBorder)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("5. GitHub CI/CD & Auto-Push", style = MaterialTheme.typography.titleSmall)
+                        PlatformGuideTriggerButton(
+                            onClick = { activeGuideId = PlatformGuideId.GITHUB_CICD }
+                        )
+                    }
+
                     OutlinedTextField(
                         value = draft.githubRepo,
                         onValueChange = { draft = draft.copy(githubRepo = it) },
@@ -413,7 +586,7 @@ fun VaultSettingsScreen(
                     )
 
                     SecretVaultField(
-                        label = "GitHub PAT (Optional for Private Repos)",
+                        label = "GitHub PAT (repo + workflow scopes)",
                         value = draft.githubToken,
                         unlocked = secretsUnlocked,
                         onValueChange = { draft = draft.copy(githubToken = it) },
@@ -429,11 +602,148 @@ fun VaultSettingsScreen(
                         onClick = {
                             urlError = viewModel.saveVaultConfiguration(draft)
                         },
+                        enabled = roleCapabilities.canWriteVault,
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Icon(Icons.Filled.Save, contentDescription = null)
                         Spacer(modifier = Modifier.width(6.dp))
-                        Text("Save Encrypted Vault")
+                        Text(if (roleCapabilities.canWriteVault) "Save Encrypted Vault" else "Save Encrypted Vault (Owner Only)")
+                    }
+                }
+            }
+        }
+
+        // v5.2 Dedicated Telegram Bot & 2 GB Direct Kaggle Upload Card
+        item {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = AmoledSurface),
+                border = BorderStroke(1.dp, AmoledBorder)
+            ) {
+                Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Telegram Bot & 2 GB Direct Kaggle Upload", style = MaterialTheme.typography.titleMedium)
+                            Text(
+                                "Encrypted MTProto keys for headless 2 GB uploads directly from Kaggle GPU",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = TextSecondary
+                            )
+                        }
+                        PlatformGuideTriggerButton(
+                            onClick = { activeGuideId = PlatformGuideId.TELEGRAM_2GB }
+                        )
+                    }
+
+                    SecretVaultField(
+                        label = "TG_BOT_TOKEN (from @BotFather)",
+                        value = draft.telegramBotToken,
+                        unlocked = secretsUnlocked,
+                        onValueChange = { draft = draft.copy(telegramBotToken = it) },
+                        onCopy = {
+                            requireBiometricThen("Authenticate to copy TG_BOT_TOKEN") {
+                                clipboard.setText(AnnotatedString(draft.telegramBotToken))
+                                viewModel.postToast("Copied TG_BOT_TOKEN.")
+                            }
+                        }
+                    )
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        OutlinedTextField(
+                            value = draft.telegramChatId,
+                            onValueChange = { draft = draft.copy(telegramChatId = it) },
+                            label = { Text("TG_CHAT_ID (Private Chat or -100... Channel)") },
+                            singleLine = true,
+                            modifier = Modifier.weight(1f)
+                        )
+                        OutlinedButton(
+                            onClick = {
+                                viewModel.autoDetectTelegramChatId(draft.telegramBotToken) { detectedId ->
+                                    draft = draft.copy(telegramChatId = detectedId)
+                                }
+                            },
+                            enabled = !isDetectingTgChatId && draft.telegramBotToken.isNotBlank()
+                        ) {
+                            Icon(Icons.Filled.AutoFixHigh, contentDescription = null)
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(if (isDetectingTgChatId) "Detecting..." else "Auto-Detect Chat ID")
+                        }
+                    }
+
+                    SecretVaultField(
+                        label = "TG_API_ID (from my.telegram.org · Enables 2 GB MTProto)",
+                        value = draft.telegramApiId,
+                        unlocked = secretsUnlocked,
+                        onValueChange = { draft = draft.copy(telegramApiId = it) },
+                        onCopy = {
+                            requireBiometricThen("Authenticate to copy TG_API_ID") {
+                                clipboard.setText(AnnotatedString(draft.telegramApiId))
+                                viewModel.postToast("Copied TG_API_ID.")
+                            }
+                        }
+                    )
+
+                    SecretVaultField(
+                        label = "TG_API_HASH (from my.telegram.org · Enables 2 GB MTProto)",
+                        value = draft.telegramApiHash,
+                        unlocked = secretsUnlocked,
+                        onValueChange = { draft = draft.copy(telegramApiHash = it) },
+                        onCopy = {
+                            requireBiometricThen("Authenticate to copy TG_API_HASH") {
+                                clipboard.setText(AnnotatedString(draft.telegramApiHash))
+                                viewModel.postToast("Copied TG_API_HASH.")
+                            }
+                        }
+                    )
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedButton(
+                            onClick = {
+                                requireBiometricThen("Authenticate to copy Kaggle Secrets template") {
+                                    val setupText = viewModel.buildKaggleSecretsSetupText(
+                                        botToken = draft.telegramBotToken,
+                                        chatId = draft.telegramChatId,
+                                        apiId = draft.telegramApiId,
+                                        apiHash = draft.telegramApiHash
+                                    )
+                                    clipboard.setText(AnnotatedString(setupText))
+                                    viewModel.postToast("Copied Kaggle Secrets checklist (4 keys). Paste in Kaggle Add-ons -> Secrets.")
+                                }
+                            },
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(Icons.Filled.ContentCopy, contentDescription = null)
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Copy Kaggle Secrets Setup")
+                        }
+
+                        Button(
+                            onClick = {
+                                viewModel.saveTelegramCredentials(
+                                    botToken = draft.telegramBotToken,
+                                    chatId = draft.telegramChatId,
+                                    apiId = draft.telegramApiId,
+                                    apiHash = draft.telegramApiHash
+                                )
+                                viewModel.testTelegramBot()
+                            },
+                            enabled = !isBackupBusy && draft.telegramBotToken.isNotBlank() && draft.telegramChatId.isNotBlank(),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(Icons.Filled.Send, contentDescription = null)
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Save & Test Bot")
+                        }
                     }
                 }
             }
@@ -598,6 +908,202 @@ fun VaultSettingsScreen(
                         Icon(Icons.Filled.Add, contentDescription = null)
                         Spacer(modifier = Modifier.width(6.dp))
                         Text("Add Kaggle Account to Pool")
+                    }
+                }
+            }
+        }
+
+        // v5.3 YouTube Data API v3 (Multi-Channel OAuth2 Vault + Setup Guide)
+        item {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = AmoledSurface),
+                border = BorderStroke(1.dp, AmoledBorder)
+            ) {
+                Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("YouTube Data API v3 (Multi-Channel Auto-Uploader)", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        "Pure OkHttp3 OAuth2 refresh + 2 MB chunked resumable uploader. Map channels to individual Niches.",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = TextSecondary
+                    )
+                    PlatformGuideTriggerButton(
+                        label = "? Setup Guide & Commands",
+                        onClick = { activeGuideId = PlatformGuideId.YOUTUBE_API }
+                    )
+
+                    OutlinedTextField(
+                        value = draft.ytChannelLabel,
+                        onValueChange = { draft = draft.copy(ytChannelLabel = it) },
+                        label = { Text("Active Channel Label (e.g. Main Tech Channel)") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    SecretVaultField(
+                        label = "YT_CLIENT_ID (OAuth Desktop Client ID)",
+                        value = draft.ytClientId,
+                        unlocked = secretsUnlocked,
+                        onValueChange = { draft = draft.copy(ytClientId = it) },
+                        onCopy = { copyWithBiometric("YT_CLIENT_ID", draft.ytClientId) }
+                    )
+                    SecretVaultField(
+                        label = "YT_CLIENT_SECRET",
+                        value = draft.ytClientSecret,
+                        unlocked = secretsUnlocked,
+                        onValueChange = { draft = draft.copy(ytClientSecret = it) },
+                        onCopy = { copyWithBiometric("YT_CLIENT_SECRET", draft.ytClientSecret) }
+                    )
+                    SecretVaultField(
+                        label = "YT_REFRESH_TOKEN (1-Time Python OAuth Token)",
+                        value = draft.ytRefreshToken,
+                        unlocked = secretsUnlocked,
+                        onValueChange = { draft = draft.copy(ytRefreshToken = it) },
+                        onCopy = { copyWithBiometric("YT_REFRESH_TOKEN", draft.ytRefreshToken) }
+                    )
+
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                        Button(
+                            onClick = { urlError = viewModel.saveVaultConfiguration(draft) },
+                            enabled = roleCapabilities.canWriteVault,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(Icons.Filled.Save, contentDescription = null)
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(if (roleCapabilities.canWriteVault) "Save YT Vault" else "Owner Only")
+                        }
+                        OutlinedButton(
+                            onClick = { viewModel.testYouTubeConnection() },
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(Icons.Filled.NetworkCheck, contentDescription = null)
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Test OAuth")
+                        }
+                    }
+
+                    HorizontalDivider(color = AmoledBorder)
+                    Text("Multi-Channel Pool (${youTubeProfiles.size} channel(s))", style = MaterialTheme.typography.labelMedium, color = EmeraldAccent)
+                    youTubeProfiles.forEach { profile ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            FilterChip(
+                                selected = profile.id == activeYouTubeProfileId,
+                                onClick = { viewModel.selectYouTubeChannelProfile(profile.id) },
+                                label = { Text(profile.label) }
+                            )
+                            IconButton(onClick = { viewModel.removeYouTubeChannelProfile(profile.id) }) {
+                                Icon(Icons.Filled.Delete, contentDescription = "Remove YT Profile", tint = CrimsonDanger)
+                            }
+                        }
+                    }
+                    OutlinedTextField(
+                        value = ytProfileLabel,
+                        onValueChange = { ytProfileLabel = it },
+                        label = { Text("New Channel Profile Label (e.g. Shorts Channel #2)") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = ytProfileClientId,
+                        onValueChange = { ytProfileClientId = it },
+                        label = { Text("Channel OAuth Client ID") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = ytProfileClientSecret,
+                        onValueChange = { ytProfileClientSecret = it },
+                        label = { Text("Channel OAuth Client Secret") },
+                        visualTransformation = PasswordVisualTransformation(),
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = ytProfileRefreshToken,
+                        onValueChange = { ytProfileRefreshToken = it },
+                        label = { Text("Channel Refresh Token") },
+                        visualTransformation = PasswordVisualTransformation(),
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedButton(
+                        onClick = {
+                            viewModel.saveYouTubeChannelProfile(
+                                label = ytProfileLabel,
+                                clientId = ytProfileClientId,
+                                clientSecret = ytProfileClientSecret,
+                                refreshToken = ytProfileRefreshToken
+                            )
+                            ytProfileLabel = ""
+                            ytProfileClientId = ""
+                            ytProfileClientSecret = ""
+                            ytProfileRefreshToken = ""
+                        },
+                        enabled = ytProfileClientId.isNotBlank() && ytProfileRefreshToken.isNotBlank(),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Filled.Add, contentDescription = null)
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Add YouTube Channel to Pool")
+                    }
+                }
+            }
+        }
+
+        // v5.3 Meta (Facebook Page & Instagram) Reels Graph API Vault
+        item {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = AmoledSurface),
+                border = BorderStroke(1.dp, AmoledBorder)
+            ) {
+                Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Meta Reels Publisher (FB Page + IG Business)", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        "Optional 1-tap direct Facebook Page Reels & Instagram Reels Graph API publishing.",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = TextSecondary
+                    )
+                    PlatformGuideTriggerButton(
+                        label = "? Setup Guide & Commands",
+                        onClick = { activeGuideId = PlatformGuideId.META_REELS }
+                    )
+                    OutlinedTextField(
+                        value = draft.metaPageId,
+                        onValueChange = { draft = draft.copy(metaPageId = it) },
+                        label = { Text("META_PAGE_ID (Facebook Page ID)") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = draft.metaIgUserId,
+                        onValueChange = { draft = draft.copy(metaIgUserId = it) },
+                        label = { Text("META_IG_USER_ID (IG Business Account ID)") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    SecretVaultField(
+                        label = "META_PAGE_ACCESS_TOKEN (60-Day Long-Lived Token)",
+                        value = draft.metaPageAccessToken,
+                        unlocked = secretsUnlocked,
+                        onValueChange = { draft = draft.copy(metaPageAccessToken = it) },
+                        onCopy = { copyWithBiometric("META_PAGE_ACCESS_TOKEN", draft.metaPageAccessToken) }
+                    )
+                    Button(
+                        onClick = {
+                            viewModel.saveMetaReelsCredentials(
+                                pageId = draft.metaPageId,
+                                igUserId = draft.metaIgUserId,
+                                pageAccessToken = draft.metaPageAccessToken
+                            )
+                        },
+                        enabled = roleCapabilities.canWriteVault,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Filled.Save, contentDescription = null)
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(if (roleCapabilities.canWriteVault) "Save Meta Reels Credentials" else "Owner Only")
                     }
                 }
             }
@@ -903,6 +1409,18 @@ fun VaultSettingsScreen(
             },
             dismissButton = {
                 OutlinedButton(onClick = { panicStep = 0 }) { Text("Abort") }
+            }
+        )
+    }
+
+    activeGuideId?.let { guideId ->
+        PlatformGuideBottomSheet(
+            guideId = guideId,
+            onDismiss = { activeGuideId = null },
+            onToast = { viewModel.postToast(it) },
+            onRunInTerminal = { command ->
+                activeGuideId = null
+                onRunGuideCommandInTerminal(command)
             }
         )
     }

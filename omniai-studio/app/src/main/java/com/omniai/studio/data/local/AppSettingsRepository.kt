@@ -52,7 +52,15 @@ data class AppSettings(
     val defaultGithubOwner: String = "",
     val defaultGithubBranch: String = "main",
     val autoWatchActionsAfterPush: Boolean = true,
-    val aiAutoCommitMessageEnabled: Boolean = true
+    val aiAutoCommitMessageEnabled: Boolean = true,
+    // v5.2 Direct Kaggle-to-Telegram 2 GB MTProto Uploader & Data Saver
+    val directKaggleTelegramUpload: Boolean = false,
+    val skipPhoneDownloadWhenSentToTelegram: Boolean = false,
+    // v5.3 Direct YouTube Auto-Uploader, Thumbnail Studio & Meta Reels
+    val directKaggleYoutubeUpload: Boolean = false,
+    val youtubeDefaultPrivacy: String = "private", // "private" | "unlisted" | "public"
+    val directKaggleMetaReelsUpload: Boolean = false,
+    val activeThumbnailPath: String = ""
 )
 
 class AppSettingsRepository(context: Context) {
@@ -101,7 +109,15 @@ class AppSettingsRepository(context: Context) {
         defaultGithubOwner = prefs.getString(KEY_DEFAULT_GH_OWNER, "")?.trim().orEmpty(),
         defaultGithubBranch = prefs.getString(KEY_DEFAULT_GH_BRANCH, "main")?.trim()?.ifBlank { "main" } ?: "main",
         autoWatchActionsAfterPush = prefs.getBoolean(KEY_AUTO_WATCH_ACTIONS, true),
-        aiAutoCommitMessageEnabled = prefs.getBoolean(KEY_AI_AUTO_COMMIT_MSG, true)
+        aiAutoCommitMessageEnabled = prefs.getBoolean(KEY_AI_AUTO_COMMIT_MSG, true),
+        directKaggleTelegramUpload = prefs.getBoolean(KEY_DIRECT_TG_UPLOAD, false),
+        skipPhoneDownloadWhenSentToTelegram = prefs.getBoolean(KEY_SKIP_PHONE_DL_TG, false),
+        directKaggleYoutubeUpload = prefs.getBoolean(KEY_DIRECT_YT_UPLOAD, false),
+        youtubeDefaultPrivacy = prefs.getString(KEY_YT_DEFAULT_PRIVACY, "private")?.let {
+            if (it in VALID_YT_PRIVACY) it else "private"
+        } ?: "private",
+        directKaggleMetaReelsUpload = prefs.getBoolean(KEY_DIRECT_META_REELS, false),
+        activeThumbnailPath = prefs.getString(KEY_ACTIVE_THUMBNAIL_PATH, "") ?: ""
     )
 
     fun update(transform: (AppSettings) -> AppSettings) {
@@ -126,7 +142,8 @@ class AppSettingsRepository(context: Context) {
                 autoSummarizeNicheThreshold = s.autoSummarizeNicheThreshold.coerceIn(10, 50),
                 activeProjectId = s.activeProjectId.coerceAtLeast(0L),
                 defaultGithubOwner = s.defaultGithubOwner.trim(),
-                defaultGithubBranch = s.defaultGithubBranch.trim().ifBlank { "main" }
+                defaultGithubBranch = s.defaultGithubBranch.trim().ifBlank { "main" },
+                youtubeDefaultPrivacy = if (s.youtubeDefaultPrivacy in VALID_YT_PRIVACY) s.youtubeDefaultPrivacy else "private"
             )
         }
         prefs.edit()
@@ -160,6 +177,12 @@ class AppSettingsRepository(context: Context) {
             .putString(KEY_DEFAULT_GH_BRANCH, updated.defaultGithubBranch)
             .putBoolean(KEY_AUTO_WATCH_ACTIONS, updated.autoWatchActionsAfterPush)
             .putBoolean(KEY_AI_AUTO_COMMIT_MSG, updated.aiAutoCommitMessageEnabled)
+            .putBoolean(KEY_DIRECT_TG_UPLOAD, updated.directKaggleTelegramUpload)
+            .putBoolean(KEY_SKIP_PHONE_DL_TG, updated.skipPhoneDownloadWhenSentToTelegram)
+            .putBoolean(KEY_DIRECT_YT_UPLOAD, updated.directKaggleYoutubeUpload)
+            .putString(KEY_YT_DEFAULT_PRIVACY, updated.youtubeDefaultPrivacy)
+            .putBoolean(KEY_DIRECT_META_REELS, updated.directKaggleMetaReelsUpload)
+            .putString(KEY_ACTIVE_THUMBNAIL_PATH, updated.activeThumbnailPath)
             .apply()
         _settings.value = updated
     }
@@ -201,9 +224,16 @@ class AppSettingsRepository(context: Context) {
         private const val KEY_DEFAULT_GH_BRANCH = "v45_default_github_branch"
         private const val KEY_AUTO_WATCH_ACTIONS = "v45_auto_watch_actions"
         private const val KEY_AI_AUTO_COMMIT_MSG = "v45_ai_auto_commit_msg"
+        private const val KEY_DIRECT_TG_UPLOAD = "v52_direct_kaggle_telegram_upload"
+        private const val KEY_SKIP_PHONE_DL_TG = "v52_skip_phone_download_tg"
+        private const val KEY_DIRECT_YT_UPLOAD = "v53_direct_kaggle_youtube_upload"
+        private const val KEY_YT_DEFAULT_PRIVACY = "v53_youtube_default_privacy"
+        private const val KEY_DIRECT_META_REELS = "v53_direct_kaggle_meta_reels_upload"
+        private const val KEY_ACTIVE_THUMBNAIL_PATH = "v53_active_thumbnail_path"
 
         val VALID_POLL_INTERVALS = listOf(15, 20, 30, 60)
         val VALID_NEWS_INTERVALS = listOf(12, 24)
         val VALID_BACKUP_DAYS = listOf(1, 7)
+        val VALID_YT_PRIVACY = listOf("private", "unlisted", "public")
     }
 }
