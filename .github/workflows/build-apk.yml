@@ -20,26 +20,15 @@ jobs:
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.4'
 
       - name: Build Debug APK
-        run: |
-          GRADLEW_PATH=$(find . -maxdepth 3 -name "gradlew" | head -n 1)
-          if [ -n "$GRADLEW_PATH" ]; then
-            echo "Found gradlew at $GRADLEW_PATH"
-            chmod +x "$GRADLEW_PATH"
-            cd "$(dirname "$GRADLEW_PATH")"
-            ./gradlew assembleDebug
-          else
-            echo "gradlew not found, locating build.gradle..."
-            BUILD_FILE=$(find . -maxdepth 3 -name "settings.gradle*" | head -n 1)
-            if [ -n "$BUILD_FILE" ]; then
-              cd "$(dirname "$BUILD_FILE")"
-            fi
-            gradle assembleDebug
-          fi
+        working-directory: ./omniai-studio
+        run: gradle assembleDebug
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: app-debug-apk
-          path: "**/build/outputs/apk/debug/*.apk"
+          path: omniai-studio/app/build/outputs/apk/debug/*.apk
