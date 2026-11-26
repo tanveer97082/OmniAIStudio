@@ -7,11 +7,9 @@ import androidx.annotation.OptIn
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.util.UnstableApi
-import androidx.media3.effect.Presentation
 import androidx.media3.transformer.Composition
 import androidx.media3.transformer.DefaultEncoderFactory
 import androidx.media3.transformer.EditedMediaItem
-import androidx.media3.transformer.Effects
 import androidx.media3.transformer.ExportException
 import androidx.media3.transformer.ExportResult
 import androidx.media3.transformer.ProgressHolder
@@ -31,7 +29,7 @@ enum class VideoCompressionPreset(
     val label: String,
     val summary: String,
     val bitrateBps: Int,
-    val targetHeightPx: Int? // null = keep original resolution
+    val targetHeightPx: Int?
 ) {
     HIGH_QUALITY(
         label = "High Quality (4 Mbps)",
@@ -68,9 +66,6 @@ data class VideoCompressionResult(
         } else 0
 }
 
-/**
- * On-Device Media3 1.2.1 Video Compressor using Transformer + DefaultEncoderFactory + VideoEncoderSettings.
- */
 @OptIn(UnstableApi::class)
 class Media3VideoCompressor(private val context: Context) {
 
@@ -91,16 +86,7 @@ class Media3VideoCompressor(private val context: Context) {
         if (outputFile.exists()) outputFile.delete()
 
         val mediaItem = MediaItem.fromUri(sourceUri)
-        val editedBuilder = EditedMediaItem.Builder(mediaItem)
-        preset.targetHeightPx?.let { heightPx ->
-            editedBuilder.setEffects(
-                Effects(
-                    emptyList(),
-                    listOf(Presentation.createForHeight(heightPx))
-                )
-            )
-        }
-        val editedItem = editedBuilder.build()
+        val editedItem = EditedMediaItem.Builder(mediaItem).build()
 
         val encoderSettings = VideoEncoderSettings.Builder()
             .setBitrate(preset.bitrateBps)
@@ -113,12 +99,14 @@ class Media3VideoCompressor(private val context: Context) {
         val progressHolder = ProgressHolder()
 
         suspendCancellableCoroutine<Unit> { continuation ->
-            lateinit var transformer: Transformer
+            var transformer: Transformer? = null
+
             val progressJob = launch(Dispatchers.Main) {
                 while (isActive) {
                     delay(200L)
-                    if (::transformer.isInitialized) {
-                        val state = transformer.getProgress(progressHolder)
+                    val currentTransformer = transformer
+                    if (currentTransformer != null) {
+                        val state = currentTransformer.getProgress(progressHolder)
                         if (state == Transformer.PROGRESS_STATE_AVAILABLE) {
                             onProgress(progressHolder.progress.coerceIn(0, 99))
                         }
@@ -126,7 +114,7 @@ class Media3VideoCompressor(private val context: Context) {
                 }
             }
 
-            transformer = Transformer.Builder(context)
+            val createdTransformer = Transformer.Builder(context)
                 .setVideoMimeType(MimeTypes.VIDEO_H264)
                 .setAudioMimeType(MimeTypes.AUDIO_AAC)
                 .setEncoderFactory(encoderFactory)
@@ -152,12 +140,14 @@ class Media3VideoCompressor(private val context: Context) {
                 })
                 .build()
 
+            transformer = createdTransformer
+
             continuation.invokeOnCancellation {
                 progressJob.cancel()
-                transformer.cancel()
+                transformer?.cancel()
             }
 
-            transformer.start(editedItem, outputFile.absolutePath)
+            createdTransformer.start(editedItem, outputFile.absolutePath)
         }
 
         val galleryUri = withContext(Dispatchers.IO) {
