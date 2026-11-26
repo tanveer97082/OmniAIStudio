@@ -285,7 +285,7 @@ fun OmniOverflowMenuButton(
         DropdownMenu(
             expanded = expanded,
             onDismissRequest = { expanded = false },
-            containerColor = colorScheme.surfaceVariant
+            modifier = Modifier.background(colorScheme.surfaceVariant)
         ) {
             actions.forEach { item ->
                 val tint = if (item.isDestructive) colorScheme.error else colorScheme.onSurface
@@ -413,7 +413,6 @@ fun OmniSkeletonCard(
             baseColor.copy(alpha = alpha * 0.6f)
         )
     )
-
     OmniSurfaceCard(modifier = modifier) {
         Box(
             modifier = Modifier
