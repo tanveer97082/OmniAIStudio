@@ -610,10 +610,10 @@ fun ChatStudioScreen(
                                 onToggleTranslate = { viewModel.toggleTranslateText(transKey, msg.content) },
                                 onToggleSpeak = { viewModel.toggleSpeakMessage(msg.id, msg.content) },
                                 onToggleBookmark = {
-                                    if (!isIncognitoMode && msg.id > 0L) {
-                                        viewModel.toggleMessageBookmark(msg)
-                                    }
-                                },
+    if (!isIncognitoMode && msg.id > 0L) {
+        viewModel.toggleMessageBookmark(msg.id, !msg.isBookmarked)
+    }
+},
                                 onCopyCode = { code ->
                                     clipboard.setText(AnnotatedString(code))
                                     viewModel.postToast("Copied code block to clipboard.")
@@ -1564,9 +1564,7 @@ fun ChatStudioScreen(
                                             viewModel.selectThread(saved.threadId)
                                             showBookmarksDialog = false
                                         }) { Text("Open Thread") }
-                                        TextButton(onClick = {
-                                            viewModel.toggleMessageBookmark(saved)
-                                        }) { Text("Remove", color = AmberWarning) }
+                                        TextButton(onClick = { viewModel.toggleMessageBookmark(saved.id, false) }) { Text("Remove", color = AmberWarning) }
                                     }
                                 }
                             }
