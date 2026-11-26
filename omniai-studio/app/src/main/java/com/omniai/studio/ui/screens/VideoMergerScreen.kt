@@ -414,35 +414,37 @@ fun VideoMergerScreen(viewModel: OmniAiViewModel) {
                         color = TextSecondary
                     )
 
-                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        VideoCompressionPreset.entries.forEach { preset ->
-                            FilterChip(
-                                selected = compressState.preset == preset,
-                                onClick = { viewModel.setCompressionPreset(preset) },
-                                label = { Text(preset.label) },
+
+Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            VideoCompressionPreset.entries.forEach { preset ->
+                                FilterChip(
+                                    selected = compressState.selectedPreset == preset,
+                                    onClick = { viewModel.setCompressionPreset(preset) },
+                                    label = { Text(preset.label) },
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                            }
+                        }
+
+                        if (compressState.isCompressing || compressState.progressPercent > 0) {
+                            LinearProgressIndicator(
+                                progress = { (compressState.progressPercent / 100f).coerceIn(0f, 1f) },
                                 modifier = Modifier.fillMaxWidth()
                             )
                         }
-                    }
 
-                    if (compressState.isCompressing || compressState.progressPercent > 0) {
-                        LinearProgressIndicator(
-                            progress = { (compressState.progressPercent / 100f).coerceIn(0f, 1f) },
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                    }
-
-                    if (compressState.beforeBytes > 0L && compressState.afterBytes > 0L) {
-                        val beforeMb = compressState.beforeBytes / (1024.0 * 1024.0)
-                        val afterMb = compressState.afterBytes / (1024.0 * 1024.0)
-                        val savedPct = (100.0 - (afterMb / beforeMb.coerceAtLeast(0.01) * 100.0)).coerceAtLeast(0.0)
-                        Text(
-                            text = "Before: %.2f MB -> After: %.2f MB (Saved %.0f%%)".format(beforeMb, afterMb, savedPct),
-                            style = MaterialTheme.typography.labelMedium,
-                            color = EmeraldAccent
-                        )
-                    }
-
+                        compressState.lastResult?.let { result ->
+                            if (result.originalBytes > 0L && result.compressedBytes > 0L) {
+                                val beforeMb = result.originalBytes / (1024.0 * 1024.0)
+                                val afterMb = result.compressedBytes / (1024.0 * 1024.0)
+                                val savedPct = (100.0 - (afterMb / beforeMb.coerceAtLeast(0.01) * 100.0)).coerceAtLeast(0.0)
+                                Text(
+                                    text = "Before: %.2f MB -> After: %.2f MB (Saved %.0f%%)".format(beforeMb, afterMb, savedPct),
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = EmeraldAccent
+                                )
+                            }
+                        }
                     compressState.lastStatus?.let { status ->
                         Text(status, style = MaterialTheme.typography.labelMedium, color = TextSecondary)
                     }
