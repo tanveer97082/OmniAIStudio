@@ -432,7 +432,9 @@ class OmniAiViewModel(application: Application) : AndroidViewModel(application) 
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
 
     val activeNicheNextCommands: StateFlow<List<NextCommandEntity>> = activeNicheId
-        .flatMapLatest { nicheId -> db.nextCommandDao().observeUnusedCommandsForNiche(nicheId) }
+    .flatMapLatest { nicheId ->
+        kotlinx.coroutines.flow.flow { emit(db.nextCommandDao().getUnusedCommandsForNicheOnce(nicheId)) }
+    }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val activeNicheSeriesEpisodes: StateFlow<List<SeriesEpisodeEntity>> = activeNicheId
@@ -1537,10 +1539,10 @@ class OmniAiViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun deleteThread(thread: ChatThreadEntity) {
-        rolePermissionGuard.denyReasonForDelete()?.let {
-            postToast(it)
-            return
-        }
+        rolePermissionGuard.denyReasonForContentWrite("send chat messages")?.let {
+    postToast(it)
+    return
+}
         viewModelScope.launch(Dispatchers.IO) {
             db.chatDao().deleteThread(thread)
             if (_activeThreadId.value == thread.id) {
@@ -1789,10 +1791,10 @@ class OmniAiViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun sendChatMessage(userText: String) {
-        rolePermissionGuard.denyReasonForContentWrite()?.let {
-            postToast(it)
-            return
-        }
+        rolePermissionGuard.denyReasonForContentWrite("write content")?.let {
+    postToast(it)
+    return
+}
         val trimmed = userText.trim()
         if (trimmed.isEmpty() || _isStreamingChat.value) return
 
@@ -4049,7 +4051,7 @@ class OmniAiViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun deleteVideoScript(script: VideoScriptEntity) {
-        rolePermissionGuard.denyReasonForDelete()?.let {
+rolePermissionGuard.denyReasonForContentWrite("modify content")
             postToast(it)
             return
         }
@@ -4517,7 +4519,7 @@ class OmniAiViewModel(application: Application) : AndroidViewModel(application) 
     private suspend fun seedDefaultProjectIfEmpty() {
         val existing = db.projectDao().getAllProjectsOnce()
         if (existing.isNotEmpty()) return
-        val repoParts = vault.githubOtaRepo.trim().split("/")
+        val repoParts = vault.githubRepo.trim().split("/")
         val defaultOwner = settingsRepo.current.defaultGithubOwner.ifBlank { repoParts.getOrNull(0).orEmpty() }
         val defaultRepo = repoParts.getOrNull(1).orEmpty()
         val now = System.currentTimeMillis()
@@ -4689,7 +4691,7 @@ class OmniAiViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun deleteProject(project: ProjectEntity) {
-        rolePermissionGuard.denyReasonForDelete()?.let {
+rolePermissionGuard.denyReasonForContentWrite("modify content")
             postToast(it)
             return
         }
@@ -4760,7 +4762,7 @@ class OmniAiViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun deleteProjectTask(task: ProjectTaskEntity) {
-        rolePermissionGuard.denyReasonForDelete()?.let {
+rolePermissionGuard.denyReasonForContentWrite("modify content")
             postToast(it)
             return
         }
@@ -5004,7 +5006,7 @@ class OmniAiViewModel(application: Application) : AndroidViewModel(application) 
                     repoName = repoName.ifBlank { project.slug },
                     description = description.ifBlank { project.description }
                 )
-                val owner = created.owner?.login?.ifBlank { settingsRepo.current.defaultGithubOwner }
+                val owner = created.vault.githubRepo.substringBefore("/")?.login?.ifBlank { settingsRepo.current.defaultGithubOwner }
                     ?: settingsRepo.current.defaultGithubOwner
                 db.projectDao().updateProject(
                     project.copy(
@@ -5377,7 +5379,7 @@ class OmniAiViewModel(application: Application) : AndroidViewModel(application) 
             _isLaunchingAdobeBridge.value = true
             try {
                 val niche = activeNiche.value
-                val charProfile = niche?.defaultCharacterId?.let { charId ->
+                val charProfile = _selectedCharacterDnaId.value?.let { charId ->
                     characterProfiles.value.firstOrNull { it.id == charId }
                 } ?: characterProfiles.value.firstOrNull()
 
