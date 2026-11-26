@@ -943,21 +943,21 @@ fun VaultSettingsScreen(
                         value = draft.ytClientId,
                         unlocked = secretsUnlocked,
                         onValueChange = { draft = draft.copy(ytClientId = it) },
-                        onCopy = { copyWithBiometric("YT_CLIENT_ID", draft.ytClientId) }
+                        onCopy = { requireBiometricThen("Authenticate to copy YT_CLIENT_ID") { clipboard.setText(AnnotatedString(draft.ytClientId)); viewModel.postToast("Copied YT_CLIENT_ID.") } }
                     )
                     SecretVaultField(
                         label = "YT_CLIENT_SECRET",
                         value = draft.ytClientSecret,
                         unlocked = secretsUnlocked,
                         onValueChange = { draft = draft.copy(ytClientSecret = it) },
-                        onCopy = { copyWithBiometric("YT_CLIENT_SECRET", draft.ytClientSecret) }
+                        onCopy = { requireBiometricThen("Authenticate to copy YT_CLIENT_SECRET") { clipboard.setText(AnnotatedString(draft.ytClientSecret)); viewModel.postToast("Copied YT_CLIENT_SECRET.") } }
                     )
                     SecretVaultField(
                         label = "YT_REFRESH_TOKEN (1-Time Python OAuth Token)",
                         value = draft.ytRefreshToken,
                         unlocked = secretsUnlocked,
                         onValueChange = { draft = draft.copy(ytRefreshToken = it) },
-                        onCopy = { copyWithBiometric("YT_REFRESH_TOKEN", draft.ytRefreshToken) }
+                        onCopy = { requireBiometricThen("Authenticate to copy YT_REFRESH_TOKEN") { clipboard.setText(AnnotatedString(draft.ytRefreshToken)); viewModel.postToast("Copied YT_REFRESH_TOKEN.") } }
                     )
 
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
@@ -1088,7 +1088,7 @@ fun VaultSettingsScreen(
                         value = draft.metaPageAccessToken,
                         unlocked = secretsUnlocked,
                         onValueChange = { draft = draft.copy(metaPageAccessToken = it) },
-                        onCopy = { copyWithBiometric("META_PAGE_ACCESS_TOKEN", draft.metaPageAccessToken) }
+                        onCopy = { requireBiometricThen("Authenticate to copy META_PAGE_ACCESS_TOKEN") { clipboard.setText(AnnotatedString(draft.metaPageAccessToken)); viewModel.postToast("Copied META_PAGE_ACCESS_TOKEN.") } }
                     )
                     Button(
                         onClick = {
