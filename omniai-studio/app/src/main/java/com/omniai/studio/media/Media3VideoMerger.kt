@@ -74,7 +74,6 @@ class Media3VideoMerger(private val context: Context) {
             val mediaItemBuilder = MediaItem.Builder().setUri(clipSpec.uri)
             val startMs = clipSpec.startSec?.takeIf { it > 0.0 }?.let { (it * 1000.0).toLong() }
             val endMs = clipSpec.endSec?.takeIf { it > 0.0 }?.let { (it * 1000.0).toLong() }
-
             if (startMs != null || endMs != null) {
                 val clipBuilder = MediaItem.ClippingConfiguration.Builder()
                 if (startMs != null) {
@@ -85,14 +84,14 @@ class Media3VideoMerger(private val context: Context) {
                 }
                 mediaItemBuilder.setClippingConfiguration(clipBuilder.build())
             }
-
             EditedMediaItem.Builder(mediaItemBuilder.build())
                 .setRemoveAudio(request.muteOriginalAudio)
                 .build()
         }
-        val videoSequence = EditedMediaItemSequence(videoEditedItems)
 
+        val videoSequence = EditedMediaItemSequence(videoEditedItems)
         val sequences = mutableListOf(videoSequence)
+
         if (request.backgroundAudioUri != null) {
             val bgAudioItem = EditedMediaItem.Builder(MediaItem.fromUri(request.backgroundAudioUri))
                 .setRemoveVideo(true)
@@ -104,12 +103,14 @@ class Media3VideoMerger(private val context: Context) {
         val progressHolder = ProgressHolder()
 
         suspendCancellableCoroutine<Unit> { continuation ->
-            lateinit var transformer: Transformer
+            var transformer: Transformer? = null
+
             val progressJob = launch(Dispatchers.Main) {
                 while (isActive) {
                     delay(200L)
-                    if (::transformer.isInitialized) {
-                        val state = transformer.getProgress(progressHolder)
+                    val currentTransformer = transformer
+                    if (currentTransformer != null) {
+                        val state = currentTransformer.getProgress(progressHolder)
                         if (state == Transformer.PROGRESS_STATE_AVAILABLE) {
                             onProgress(progressHolder.progress.coerceIn(0, 99))
                         }
@@ -117,7 +118,7 @@ class Media3VideoMerger(private val context: Context) {
                 }
             }
 
-            transformer = Transformer.Builder(context)
+            val createdTransformer = Transformer.Builder(context)
                 .setVideoMimeType(MimeTypes.VIDEO_H264)
                 .setAudioMimeType(MimeTypes.AUDIO_AAC)
                 .addListener(object : Transformer.Listener {
@@ -142,12 +143,14 @@ class Media3VideoMerger(private val context: Context) {
                 })
                 .build()
 
+            transformer = createdTransformer
+
             continuation.invokeOnCancellation {
                 progressJob.cancel()
-                transformer.cancel()
+                transformer?.cancel()
             }
 
-            transformer.start(composition, outputFile.absolutePath)
+            createdTransformer.start(composition, outputFile.absolutePath)
         }
 
         val galleryUri = withContext(Dispatchers.IO) {
