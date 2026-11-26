@@ -85,7 +85,6 @@ fun AutoTypePromptBar(
 ) {
     val haptics = LocalHapticFeedback.current
     val primaryColor = MaterialTheme.colorScheme.primary
-
     var expanded by remember { mutableStateOf(true) }
     var typingTargetText by remember { mutableStateOf<String?>(null) }
     var typingSessionId by remember { mutableIntStateOf(0) }
@@ -126,7 +125,7 @@ fun AutoTypePromptBar(
             isTypingActive = false
             return@LaunchedEffect
         }
-        val stepDelay = speedMode.delayMs
+        val stepDelay = resolveStepDelayMs(speedMode)
         if (!autoTypeEnabled || stepDelay <= 0L) {
             onPromptTextUpdate(target)
             isTypingActive = false
@@ -137,7 +136,6 @@ fun AutoTypePromptBar(
             }
             return@LaunchedEffect
         }
-
         isTypingActive = true
         val stepChunk = if (target.length > 260) 2 else 1
         var cursor = 0
@@ -151,7 +149,6 @@ fun AutoTypePromptBar(
         }
         isTypingActive = false
         typingTargetText = null
-
         if (autoNextCountdownEnabled && onRunNow != null) {
             countdownSeconds = 5
             activeCountdownSession++
@@ -248,7 +245,10 @@ fun AutoTypePromptBar(
                         modifier = Modifier.size(30.dp)
                     ) {
                         if (isRegenerating) {
-                            CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(14.dp),
+                                strokeWidth = 2.dp
+                            )
                         } else {
                             Icon(
                                 imageVector = Icons.Filled.Refresh,
@@ -371,8 +371,10 @@ fun AutoTypePromptBar(
                     ) {
                         commands.take(6).forEach { cmd ->
                             val badge = sourceTypeBadge(cmd)
-                            val isVideoHandoff = onRouteToVideoDirector != null && cmd.sourceType == "CHAT_FOLLOWUP" &&
+                            val isVideoHandoff = onRouteToVideoDirector != null &&
+                                cmd.sourceType == "CHAT_FOLLOWUP" &&
                                 cmd.shortLabel.contains("video", ignoreCase = true)
+
                             Surface(
                                 onClick = {
                                     countdownSeconds = 0
@@ -423,6 +425,14 @@ fun AutoTypePromptBar(
             }
         }
     }
+}
+
+private fun resolveStepDelayMs(speedMode: AutoTypeSpeedMode): Long = when (speedMode.name) {
+    "INSTANT" -> 0L
+    "FAST" -> 10L
+    "NORMAL", "BALANCED", "MEDIUM" -> 22L
+    "SLOW", "CINEMATIC" -> 40L
+    else -> 18L
 }
 
 private fun sourceTypeBadge(cmd: NextCommandEntity): String = when (cmd.sourceType) {
