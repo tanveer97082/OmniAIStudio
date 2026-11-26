@@ -361,7 +361,7 @@ fun AnalyticsScreen(
                             ) {
                                 Text(vid.title.take(28), style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
                                 Text(
-                                    "%,d views · %d likes · %d cmt".format(vid.viewCount, vid.likeCount, vid.commentCount),
+                                    "%d likes · %d cmt".format(vid.likeCount, vid.commentCount),
                                     style = MaterialTheme.typography.labelSmall,
                                     color = EmeraldAccent
                                 )
