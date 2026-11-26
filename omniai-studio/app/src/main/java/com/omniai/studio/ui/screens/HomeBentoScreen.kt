@@ -118,7 +118,7 @@ fun HomeBentoScreen(
     val heroSubtitle = remember(nextSuggestedCommand, nextPlannedEpisode, activeNiche) {
         when {
             nextSuggestedCommand != null -> nextSuggestedCommand.fullPromptCommand
-            nextPlannedEpisode != null -> nextPlannedEpisode.hookIdea.ifBlank { nextPlannedEpisode.premise }
+nextPlannedEpisode != null -> nextPlannedEpisode.hookIdea.ifBlank { "Episode #${nextPlannedEpisode.episodeNumber}: ${nextPlannedEpisode.title}" }
             else -> activeNiche?.description?.ifBlank {
                 "Auto-type a niche-tailored storyboard concept and render on Dual-GPU Kaggle."
             } ?: "Generate your next viral episode with Niche Context."
