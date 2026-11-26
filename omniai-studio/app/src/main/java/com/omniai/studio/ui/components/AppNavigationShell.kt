@@ -213,7 +213,7 @@ fun AppNavigationShell(
         renderJobs.filter { it.status in setOf("QUEUED", "PUSHED", "RENDERING", "DOWNLOADING") }
     }
     val isActionsActive = actionsState.isWatching || actionsState.status in setOf("QUEUED", "IN_PROGRESS")
-    val onlineLanCount = remember(localServers) { localServers.count { it.isOnline } }
+    val onlineLanCount = remember(localServers) { localServers.size }
     val hasLiveActivity = activeRenderJobs.isNotEmpty() || isActionsActive || isTerminalRunning || onlineLanCount > 0 || lanWebServerState.isRunning || isNetlogEnabled
 
     val liveSummaryLabel = remember(activeRenderJobs.size, isActionsActive, isTerminalRunning, onlineLanCount, lanWebServerState.isRunning) {
