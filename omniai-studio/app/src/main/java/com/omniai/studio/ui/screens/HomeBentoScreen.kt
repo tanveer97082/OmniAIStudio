@@ -489,7 +489,7 @@ nextPlannedEpisode != null -> nextPlannedEpisode.hookIdea.ifBlank { "Episode #${
                                 text = if (ytStats != null) {
                                     "%,d subs · %,d views · %d videos".format(
                                         ytStats!!.subscriberCount,
-                                        ytStats!!.viewCount,
+                                        ytStats!!.totalViewCount,
                                         ytStats!!.videoCount
                                     )
                                 } else {

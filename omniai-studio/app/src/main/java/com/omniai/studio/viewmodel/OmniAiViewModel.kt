@@ -1539,10 +1539,10 @@ class OmniAiViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun deleteThread(thread: ChatThreadEntity) {
-        rolePermissionGuard.denyReasonForContentWrite("send chat messages")?.let {
-    postToast(it)
-    return
-}
+        rolePermissionGuard.denyReasonForDelete("delete chat thread")?.let {
+            postToast(it)
+            return
+        }
         viewModelScope.launch(Dispatchers.IO) {
             db.chatDao().deleteThread(thread)
             if (_activeThreadId.value == thread.id) {
@@ -1791,10 +1791,10 @@ class OmniAiViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun sendChatMessage(userText: String) {
-        rolePermissionGuard.denyReasonForContentWrite("write content")?.let {
-    postToast(it)
-    return
-}
+        rolePermissionGuard.denyReasonForEdit("write content")?.let {
+            postToast(it)
+            return
+        }
         val trimmed = userText.trim()
         if (trimmed.isEmpty() || _isStreamingChat.value) return
 
@@ -4051,7 +4051,7 @@ class OmniAiViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun deleteVideoScript(script: VideoScriptEntity) {
-rolePermissionGuard.denyReasonForContentWrite("modify content")
+        rolePermissionGuard.denyReasonForDelete("delete video script")?.let {
             postToast(it)
             return
         }
@@ -4691,7 +4691,7 @@ rolePermissionGuard.denyReasonForContentWrite("modify content")
     }
 
     fun deleteProject(project: ProjectEntity) {
-rolePermissionGuard.denyReasonForContentWrite("modify content")
+        rolePermissionGuard.denyReasonForDelete("delete project")?.let {
             postToast(it)
             return
         }
@@ -4762,7 +4762,7 @@ rolePermissionGuard.denyReasonForContentWrite("modify content")
     }
 
     fun deleteProjectTask(task: ProjectTaskEntity) {
-rolePermissionGuard.denyReasonForContentWrite("modify content")
+        rolePermissionGuard.denyReasonForDelete("delete project task")?.let {
             postToast(it)
             return
         }
@@ -5006,8 +5006,7 @@ rolePermissionGuard.denyReasonForContentWrite("modify content")
                     repoName = repoName.ifBlank { project.slug },
                     description = description.ifBlank { project.description }
                 )
-                val owner = created.vault.githubRepo.substringBefore("/")?.login?.ifBlank { settingsRepo.current.defaultGithubOwner }
-                    ?: settingsRepo.current.defaultGithubOwner
+                val owner = created.fullName.substringBefore('/').ifBlank { settingsRepo.current.defaultGithubOwner }
                 db.projectDao().updateProject(
                     project.copy(
                         githubOwner = owner,

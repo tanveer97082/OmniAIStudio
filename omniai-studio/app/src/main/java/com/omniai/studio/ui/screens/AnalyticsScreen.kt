@@ -341,7 +341,7 @@ fun AnalyticsScreen(
                     if (ytStats != null) {
                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             MetricKpiCard("Subscribers", "%,d".format(ytStats!!.subscriberCount), EmeraldAccent, Modifier.weight(1f))
-                            MetricKpiCard("Total Views", "%,d".format(ytStats!!.viewCount), Color(0xFF06B6D4), Modifier.weight(1f))
+                            MetricKpiCard("Total Views", "%,d".format(ytStats!!.totalViewCount), Color(0xFF06B6D4), Modifier.weight(1f))
                             MetricKpiCard("Videos", "${ytStats!!.videoCount}", primaryColor, Modifier.weight(1f))
                         }
                     } else {
