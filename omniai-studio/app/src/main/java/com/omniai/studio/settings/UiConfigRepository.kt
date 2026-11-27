@@ -63,6 +63,7 @@ enum class StudioTabId(val label: String) {
     TERMINAL("Terminal"),
     GALLERY("Gallery"),
     CONTENT_HUB("Content"),
+    RESEARCH("Research"),
     VAULT("Vault")
 }
 
@@ -85,7 +86,7 @@ data class UiCustomizationConfig(
         StudioTabId.PROJECTS
     ),
     val defaultStartupTab: StudioTabId = StudioTabId.HOME,
-    val quickFabAction: QuickFabAction = QuickFabAction.QUICK_TERMINAL,
+    val quickFabAction: QuickFabAction = QuickFabAction.DISABLED,
     val hapticFeedbackEnabled: Boolean = true,
     val reducedAnimations: Boolean = false,
     val pinnedSettingIds: List<String> = listOf(
@@ -218,6 +219,8 @@ class UiConfigRepository(private val context: Context) {
             cardCornerRadiusDp = cfg.cardCornerRadiusDp.coerceIn(0, 24),
             terminalFontSizeSp = cfg.terminalFontSizeSp.coerceIn(10, 18),
             wallpaperDimOpacity = cfg.wallpaperDimOpacity.coerceIn(0.2f, 0.95f),
+            quickFabAction = cfg.quickFabAction.takeUnless { it == QuickFabAction.QUICK_TERMINAL }
+                ?: QuickFabAction.DISABLED,
             bottomNavTabs = distinctTabs,
             pinnedSettingIds = cfg.pinnedSettingIds.distinct()
         )

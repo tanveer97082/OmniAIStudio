@@ -261,6 +261,18 @@ class CloudSyncRepository(
     private val authManager: SupabaseAuthManager,
     private val roleGuard: RolePermissionGuard
 ) {
+    @Serializable
+    private data class UserApiCredentialsUpsert(
+        @SerialName("user_id") val userId: String,
+        val credentials: UserApiCredentials,
+        @SerialName("updated_at") val updatedAt: Long
+    )
+
+    @Serializable
+    private data class UserApiCredentialsResponse(
+        val credentials: UserApiCredentials
+    )
+
     companion object {
         private const val BATCH_SIZE = 35
         private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
@@ -290,11 +302,82 @@ class CloudSyncRepository(
     )
     val syncStatus: StateFlow<CloudSyncStatus> = _syncStatus.asStateFlow()
 
+    suspend fun pushUserApiCredentials(): Result<Unit> = withContext(Dispatchers.IO) {
+        val accessToken = authManager.ensureValidAccessToken().getOrElse {
+            return@withContext Result.failure(it)
+        }
+        val userId = vault.cloudUserId.trim()
+        if (userId.isBlank()) {
+            return@withContext Result.failure(IllegalStateException("Sign in to Supabase before saving API credentials."))
+        }
+
+        try {
+            val row = UserApiCredentialsUpsert(
+                userId = userId,
+                credentials = vault.exportUserApiCredentials(),
+                updatedAt = System.currentTimeMillis()
+            )
+            val request = Request.Builder()
+                .url("${authManager.normalizedBaseUrl()}/rest/v1/user_api_credentials?on_conflict=user_id")
+                .header("apikey", vault.supabaseAnonKey.trim())
+                .header("Authorization", "Bearer $accessToken")
+                .header("Prefer", "resolution=merge-duplicates,return=minimal")
+                .post(json.encodeToString(listOf(row)).toRequestBody(JSON_MEDIA_TYPE))
+                .build()
+
+            client.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) {
+                    val setupHint = if (response.code == 404) " Run 'supabase schema' and apply its SQL first." else ""
+                    return@withContext Result.failure(
+                        IllegalStateException("Supabase API credentials save failed (HTTP ${response.code}).$setupHint")
+                    )
+                }
+            }
+            Result.success(Unit)
+        } catch (ex: Exception) {
+            Result.failure(ex)
+        }
+    }
+
+    suspend fun pullUserApiCredentials(): Result<UserApiCredentials?> = withContext(Dispatchers.IO) {
+        val accessToken = authManager.ensureValidAccessToken().getOrElse {
+            return@withContext Result.failure(it)
+        }
+        val userId = vault.cloudUserId.trim()
+        if (userId.isBlank()) {
+            return@withContext Result.failure(IllegalStateException("Sign in to Supabase before restoring API credentials."))
+        }
+
+        try {
+            val request = Request.Builder()
+                .url("${authManager.normalizedBaseUrl()}/rest/v1/user_api_credentials?select=credentials&user_id=eq.$userId&limit=1")
+                .header("apikey", vault.supabaseAnonKey.trim())
+                .header("Authorization", "Bearer $accessToken")
+                .get()
+                .build()
+
+            client.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) {
+                    val setupHint = if (response.code == 404) " Run 'supabase schema' and apply its SQL first." else ""
+                    return@withContext Result.failure(
+                        IllegalStateException("Supabase API credentials restore failed (HTTP ${response.code}).$setupHint")
+                    )
+                }
+                val body = response.body?.string().orEmpty()
+                val rows = json.decodeFromString<List<UserApiCredentialsResponse>>(body)
+                Result.success(rows.firstOrNull()?.credentials)
+            }
+        } catch (ex: Exception) {
+            Result.failure(ex)
+        }
+    }
+
     suspend fun syncNow(onProgress: ((String) -> Unit)? = null): Result<CloudSyncSummary> = withContext(Dispatchers.IO) {
         val caps = roleGuard.currentCapabilities
         if (caps.isOfflineLocal) {
             return@withContext Result.failure(IllegalStateException("App is in Offline Local Mode. Sign in with Google to sync."))
         }
+
         if (caps.isPendingApproval) {
             return@withContext Result.failure(IllegalStateException("Account is awaiting Owner approval before syncing."))
         }

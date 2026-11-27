@@ -19,11 +19,43 @@ enum class AutoTypeSpeedMode(val label: String, val charDelayMs: Long) {
     }
 }
 
+enum class AiPurposeMode(val label: String, val instruction: String) {
+    GENERAL("General", ""),
+    RESEARCH(
+        "Research",
+        "Prioritize verifiable claims, distinguish evidence from inference, and state uncertainty. Never invent sources or citations."
+    ),
+    DEEP_RESEARCH(
+        "Deep Research",
+        "Use a structured, rigorous analysis: define the question, examine evidence and counterarguments, state assumptions and limitations, and identify what would need verification. Never invent sources or citations."
+    ),
+    VIDEO_CREATION(
+        "Video Creation",
+        "Optimize for visual storytelling, a clear hook, concise narration, scene progression, and practical production details. Preserve any requested output schema."
+    ),
+    DATA_ANALYSIS(
+        "Data Analysis",
+        "Explain the method, assumptions, calculations, uncertainty, and practical interpretation. Do not claim a statistical result without sufficient data."
+    ),
+    ACADEMIC_WRITING(
+        "Academic Writing",
+        "Use a precise academic tone, define key terms, separate sourced claims from original reasoning, and never fabricate references."
+    );
+
+    companion object {
+        fun fromStoredName(raw: String?): AiPurposeMode =
+            entries.firstOrNull { it.name.equals(raw, ignoreCase = true) } ?: GENERAL
+    }
+}
+
 data class AppSettings(
     val iconVariant: AppIconVariant = AppIconVariant.DEFAULT,
     val themeAccent: ThemeAccent = ThemeAccent.MATRIX_GREEN,
     val chatFontSizeSp: Float = 14f,
     val temperature: Float = 0.7f,
+    val aiPurposeMode: AiPurposeMode = AiPurposeMode.GENERAL,
+    val profileDisplayName: String = "",
+    val initialSetupComplete: Boolean = false,
     val maxOutputTokens: Int = 2048,
     val chatContextWindow: Int = 12,
     val autoReadAiReplies: Boolean = false,
@@ -67,6 +99,11 @@ class AppSettingsRepository(context: Context) {
 
     private val prefs: SharedPreferences =
         context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+    private val legacyInstall = prefs.all.keys.any { it != KEY_INITIAL_SETUP_COMPLETE } || runCatching {
+        @Suppress("DEPRECATION")
+        val packageInfo = context.packageManager.getPackageInfo(context.packageName, 0)
+        packageInfo.firstInstallTime < packageInfo.lastUpdateTime
+    }.getOrDefault(false)
 
     private val _settings = MutableStateFlow(load())
     val settings: StateFlow<AppSettings> = _settings.asStateFlow()
@@ -78,6 +115,9 @@ class AppSettingsRepository(context: Context) {
         themeAccent = ThemeAccent.fromStoredName(prefs.getString(KEY_THEME_ACCENT, ThemeAccent.MATRIX_GREEN.name)),
         chatFontSizeSp = prefs.getFloat(KEY_CHAT_FONT_SP, 14f).coerceIn(12f, 20f),
         temperature = prefs.getFloat(KEY_TEMPERATURE, 0.7f).coerceIn(0f, 1.5f),
+        aiPurposeMode = AiPurposeMode.fromStoredName(prefs.getString(KEY_AI_PURPOSE_MODE, AiPurposeMode.GENERAL.name)),
+        profileDisplayName = prefs.getString(KEY_PROFILE_DISPLAY_NAME, "")?.trim().orEmpty(),
+        initialSetupComplete = prefs.getBoolean(KEY_INITIAL_SETUP_COMPLETE, legacyInstall),
         maxOutputTokens = prefs.getInt(KEY_MAX_OUTPUT_TOKENS, 2048).coerceIn(256, 8192),
         chatContextWindow = prefs.getInt(KEY_CHAT_CONTEXT_WINDOW, 12).coerceIn(4, 30),
         autoReadAiReplies = prefs.getBoolean(KEY_AUTO_READ_TTS, false),
@@ -135,6 +175,7 @@ class AppSettingsRepository(context: Context) {
                     s.newsCheckIntervalHours
                 } else 24,
                 activeWorkspaceId = s.activeWorkspaceId.ifBlank { "default" },
+                profileDisplayName = s.profileDisplayName.trim().take(80),
                 githubAutoBackupIntervalDays = if (s.githubAutoBackupIntervalDays in VALID_BACKUP_DAYS) {
                     s.githubAutoBackupIntervalDays
                 } else 1,
@@ -151,6 +192,9 @@ class AppSettingsRepository(context: Context) {
             .putString(KEY_THEME_ACCENT, updated.themeAccent.name)
             .putFloat(KEY_CHAT_FONT_SP, updated.chatFontSizeSp)
             .putFloat(KEY_TEMPERATURE, updated.temperature)
+            .putString(KEY_AI_PURPOSE_MODE, updated.aiPurposeMode.name)
+            .putString(KEY_PROFILE_DISPLAY_NAME, updated.profileDisplayName)
+            .putBoolean(KEY_INITIAL_SETUP_COMPLETE, updated.initialSetupComplete)
             .putInt(KEY_MAX_OUTPUT_TOKENS, updated.maxOutputTokens)
             .putInt(KEY_CHAT_CONTEXT_WINDOW, updated.chatContextWindow)
             .putBoolean(KEY_AUTO_READ_TTS, updated.autoReadAiReplies)
@@ -188,8 +232,11 @@ class AppSettingsRepository(context: Context) {
     }
 
     fun resetToDefaults() {
-        prefs.edit().clear().apply()
-        _settings.value = AppSettings()
+        val defaults = AppSettings(initialSetupComplete = true)
+        prefs.edit().clear()
+            .putBoolean(KEY_INITIAL_SETUP_COMPLETE, true)
+            .apply()
+        _settings.value = defaults
     }
 
     companion object {
@@ -198,6 +245,9 @@ class AppSettingsRepository(context: Context) {
         private const val KEY_THEME_ACCENT = "theme_accent"
         private const val KEY_CHAT_FONT_SP = "chat_font_sp"
         private const val KEY_TEMPERATURE = "ai_temperature"
+        private const val KEY_AI_PURPOSE_MODE = "ai_purpose_mode"
+        private const val KEY_PROFILE_DISPLAY_NAME = "profile_display_name"
+        private const val KEY_INITIAL_SETUP_COMPLETE = "initial_setup_complete"
         private const val KEY_MAX_OUTPUT_TOKENS = "ai_max_output_tokens"
         private const val KEY_CHAT_CONTEXT_WINDOW = "ai_context_window"
         private const val KEY_AUTO_READ_TTS = "tts_auto_read"

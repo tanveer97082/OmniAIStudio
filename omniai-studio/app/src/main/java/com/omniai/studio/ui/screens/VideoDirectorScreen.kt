@@ -105,6 +105,7 @@ import com.omniai.studio.data.local.VideoSceneTemplate
 import com.omniai.studio.data.local.VideoSceneTemplateLibrary
 import com.omniai.studio.data.local.VideoSceneTemplateOptions
 import com.omniai.studio.data.local.VideoTemplateCategory
+import com.omniai.studio.data.remote.StoryboardDialogueLine
 import com.omniai.studio.media.AdobeAppPickerDialog
 import com.omniai.studio.media.AdobeTargetApp
 import com.omniai.studio.media.ProAdobeWorkflowCard
@@ -210,6 +211,7 @@ fun VideoDirectorScreen(
     var aspectRatio by remember { mutableStateOf("9:16") }
     var stylePreset by remember { mutableStateOf("Cinematic Realism") }
     var voice by remember { mutableStateOf("English Male") }
+    var multiCharacterMode by remember { mutableStateOf(false) }
     var burnSubtitles by remember { mutableStateOf(true) }
     var downloadIndividualScenes by remember { mutableStateOf(true) }
     var selectedTemplateCategory by remember { mutableStateOf<VideoTemplateCategory?>(null) }
@@ -526,7 +528,8 @@ fun VideoDirectorScreen(
                                             stylePreset = stylePreset,
                                             voice = voice,
                                             burnSubtitles = burnSubtitles,
-                                            seamlessLoop = draftSeamlessLoop
+                                            seamlessLoop = draftSeamlessLoop,
+                                            multiCharacterMode = multiCharacterMode
                                         )
                                     }
                                 }
@@ -584,6 +587,25 @@ fun VideoDirectorScreen(
                                     }
                                 }
                             )
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text("Multi-character dialogue", style = MaterialTheme.typography.labelLarge)
+                                    Text(
+                                        "Generate named speakers with different voices",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                Switch(
+                                    checked = multiCharacterMode,
+                                    onCheckedChange = { multiCharacterMode = it }
+                                )
+                            }
 
                             // Compact Render Settings Summary Pill -> Opens ModalBottomSheet
                             Surface(
@@ -663,7 +685,8 @@ fun VideoDirectorScreen(
                                             stylePreset = stylePreset,
                                             voice = voice,
                                             burnSubtitles = burnSubtitles,
-                                            seamlessLoop = draftSeamlessLoop
+                                            seamlessLoop = draftSeamlessLoop,
+                                            multiCharacterMode = multiCharacterMode
                                         )
                                     },
                                     enabled = !isGenerating && topic.isNotBlank(),
@@ -1242,6 +1265,109 @@ fun VideoDirectorScreen(
                                             label = { Text("Voiceover Narration ($voice)") },
                                             modifier = Modifier.fillMaxWidth()
                                         )
+                                        HorizontalDivider(color = colorScheme.outline)
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Column(modifier = Modifier.weight(1f)) {
+                                                Text(
+                                                    "Character dialogue (${scene.dialogue.size})",
+                                                    style = MaterialTheme.typography.labelLarge
+                                                )
+                                                Text(
+                                                    "When added, these lines replace narration for this scene.",
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = colorScheme.onSurfaceVariant
+                                                )
+                                            }
+                                            OutlinedButton(
+                                                onClick = {
+                                                    val nextSpeaker = "Character ${scene.dialogue.size + 1}"
+                                                    viewModel.updateScene(
+                                                        idx,
+                                                        scene.copy(
+                                                            dialogue = scene.dialogue + StoryboardDialogueLine(
+                                                                characterName = nextSpeaker,
+                                                                voice = voices.first(),
+                                                                text = ""
+                                                            )
+                                                        )
+                                                    )
+                                                }
+                                            ) {
+                                                Icon(Icons.Filled.Add, contentDescription = null)
+                                                Text("Add speaker")
+                                            }
+                                        }
+                                        scene.dialogue.forEachIndexed { lineIndex, line ->
+                                            Surface(
+                                                color = colorScheme.surface,
+                                                shape = RoundedCornerShape(10.dp),
+                                                border = BorderStroke(1.dp, colorScheme.outline),
+                                                modifier = Modifier.fillMaxWidth()
+                                            ) {
+                                                Column(
+                                                    modifier = Modifier.padding(10.dp),
+                                                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                                                ) {
+                                                    Row(
+                                                        verticalAlignment = Alignment.CenterVertically
+                                                    ) {
+                                                        OutlinedTextField(
+                                                            value = line.characterName,
+                                                            onValueChange = { value ->
+                                                                val updated = scene.dialogue.toMutableList()
+                                                                updated[lineIndex] = line.copy(characterName = value)
+                                                                viewModel.updateScene(idx, scene.copy(dialogue = updated))
+                                                            },
+                                                            label = { Text("Speaker name") },
+                                                            singleLine = true,
+                                                            modifier = Modifier.weight(1f)
+                                                        )
+                                                        IconButton(
+                                                            onClick = {
+                                                                viewModel.updateScene(
+                                                                    idx,
+                                                                    scene.copy(dialogue = scene.dialogue.filterIndexed { i, _ -> i != lineIndex })
+                                                                )
+                                                            }
+                                                        ) {
+                                                            Icon(
+                                                                Icons.Filled.Delete,
+                                                                contentDescription = "Remove speaker line",
+                                                                tint = CrimsonDanger
+                                                            )
+                                                        }
+                                                    }
+                                                    LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                                        items(voices) { speakerVoice ->
+                                                            FilterChip(
+                                                                selected = line.voice == speakerVoice,
+                                                                onClick = {
+                                                                    val updated = scene.dialogue.toMutableList()
+                                                                    updated[lineIndex] = line.copy(voice = speakerVoice)
+                                                                    viewModel.updateScene(idx, scene.copy(dialogue = updated))
+                                                                },
+                                                                label = { Text(speakerVoice) }
+                                                            )
+                                                        }
+                                                    }
+                                                    OutlinedTextField(
+                                                        value = line.text,
+                                                        onValueChange = { value ->
+                                                            val updated = scene.dialogue.toMutableList()
+                                                            updated[lineIndex] = line.copy(text = value)
+                                                            viewModel.updateScene(idx, scene.copy(dialogue = updated))
+                                                        },
+                                                        label = { Text("${line.characterName} dialogue") },
+                                                        modifier = Modifier.fillMaxWidth(),
+                                                        minLines = 2
+                                                    )
+                                                }
+                                            }
+                                        }
                                         if (isSceneTranslating) {
                                             Text("Translating narration...", style = MaterialTheme.typography.labelMedium, color = AmberWarning)
                                         }

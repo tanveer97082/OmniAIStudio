@@ -45,6 +45,17 @@ class AiStreamingClient(
 
     private val jsonMediaType = "application/json; charset=utf-8".toMediaType()
 
+    private fun applyPurposeMode(systemPrompt: String): String {
+        val mode = settingsRepo?.current?.aiPurposeMode ?: return systemPrompt
+        if (mode.instruction.isBlank()) return systemPrompt
+        return buildString {
+            append(systemPrompt)
+            append("\n\nACTIVE PURPOSE MODE — ${mode.label}:\n")
+            append(mode.instruction)
+            append("\nHonor the task's requested format, schema, and explicit constraints.")
+        }
+    }
+
     /**
      * Streams chat tokens with ordered failover:
      * 1) Primary Uncensored Tunnel (OpenAI-compatible SSE)
@@ -55,9 +66,10 @@ class AiStreamingClient(
         systemPrompt: String,
         history: List<OpenAiChatMessage>
     ): Flow<StreamTokenEvent> = callbackFlow {
+        val effectiveSystemPrompt = applyPurposeMode(systemPrompt)
         val fullMessages = buildList {
-            if (systemPrompt.isNotBlank()) {
-                add(OpenAiChatMessage(role = "system", content = systemPrompt))
+            if (effectiveSystemPrompt.isNotBlank()) {
+                add(OpenAiChatMessage(role = "system", content = effectiveSystemPrompt))
             }
             addAll(history)
         }
@@ -97,7 +109,7 @@ class AiStreamingClient(
                         }
                     }
                     is ProviderTarget.GeminiFlash -> {
-                        streamGeminiSseBlocking(provider.apiKey, systemPrompt, history) { chunk ->
+                        streamGeminiSseBlocking(provider.apiKey, effectiveSystemPrompt, history) { chunk ->
                             outputChars += chunk.length
                             trySend(StreamTokenEvent(token = chunk, providerTag = provider.tag))
                         }
@@ -136,9 +148,10 @@ class AiStreamingClient(
         systemPrompt: String,
         history: List<OpenAiChatMessage>
     ): Flow<StreamTokenEvent> = callbackFlow {
+        val effectiveSystemPrompt = applyPurposeMode(systemPrompt)
         val fullMessages = buildList {
-            if (systemPrompt.isNotBlank()) {
-                add(OpenAiChatMessage(role = "system", content = systemPrompt))
+            if (effectiveSystemPrompt.isNotBlank()) {
+                add(OpenAiChatMessage(role = "system", content = effectiveSystemPrompt))
             }
             addAll(history)
         }
@@ -160,7 +173,7 @@ class AiStreamingClient(
                     }
                 }
                 is ProviderTarget.GeminiFlash -> {
-                    streamGeminiSseBlocking(provider.apiKey, systemPrompt, history) { chunk ->
+                    streamGeminiSseBlocking(provider.apiKey, effectiveSystemPrompt, history) { chunk ->
                         outputChars += chunk.length
                         trySend(StreamTokenEvent(token = chunk, providerTag = provider.tag))
                     }
@@ -239,7 +252,8 @@ class AiStreamingClient(
         speedFactor: Float = 1.0f,
         useRefImage: Boolean = false,
         nicheContextBlock: String = "",
-        seamlessLoop: Boolean = false
+        seamlessLoop: Boolean = false,
+        multiCharacterMode: Boolean = false
     ): StoryboardPayload {
         val dnaBlock = if (characterDna != null) {
             """
@@ -264,11 +278,24 @@ class AiStreamingClient(
         }
 
         val effectiveStyle = characterDna?.defaultStyle?.takeIf { it.isNotBlank() } ?: stylePreset
+        val dialogueInstructions = if (multiCharacterMode) {
+            """
+            MULTI-CHARACTER MODE:
+            - Create 2–4 named recurring characters and write natural, short conversational exchanges across the scenes.
+            - Put every spoken character line in each scene's "dialogue" array with character_name, voice, and text.
+            - Use only these voice values: "English Male", "English Female", "Hindi Male", "Hindi Female".
+            - Include the speaking characters and consistent visual descriptions in the scene visual_prompt.
+            - Leave narration empty for scenes with dialogue so speech is not duplicated. Use narration only for scenes without dialogue.
+            """.trimIndent()
+        } else {
+            "Keep each scene's dialogue array empty and place speech in narration."
+        }
         val sys = """
             You are a strict JSON storyboard & social SEO generator for Wan 2.1 AI video generation.
             $nicheContextBlock
             $dnaBlock
             $loopBlock
+            $dialogueInstructions
             Output ONLY raw valid JSON matching this exact schema (no markdown fences, no commentary):
             {
               "title": "Short catchy video title",
@@ -287,7 +314,8 @@ class AiStreamingClient(
                   "scene_index": 1,
                   "visual_prompt": "Detailed cinematic shot description with camera motion, lighting, subject, and $effectiveStyle aesthetic",
                   "narration": "Spoken voiceover line matching the requested voice language",
-                  "duration_sec": 5
+                  "duration_sec": 5,
+                  "dialogue": []
                 }
               ]
             }
@@ -296,7 +324,7 @@ class AiStreamingClient(
 
         val (raw, _) = completeSinglePrompt(
             systemPrompt = sys,
-            userPrompt = "Create a $sceneCount-scene storyboard + social SEO publishing kit for topic: $topic. Style: $effectiveStyle. Voice: $voice."
+            userPrompt = "Create a $sceneCount-scene storyboard + social SEO publishing kit for topic: $topic. Style: $effectiveStyle. Voice: $voice. Multi-character dialogue: $multiCharacterMode."
         )
         val cleaned = extractJsonObject(raw)
         val parsed = json.decodeFromString<StoryboardPayload>(cleaned)
@@ -591,13 +619,25 @@ class AiStreamingClient(
             val validation = NetworkSecurityValidator.validateEndpointUrl(vault.primaryTunnelUrl)
             if (validation.isValid) {
                 val base = validation.normalizedUrl
-                val chatUrl = if (base.endsWith("/chat/completions")) base else "$base/v1/chat/completions"
                 add(
                     ProviderTarget.OpenAiCompatible(
                         label = "Primary Tunnel",
-                        endpointUrl = chatUrl,
+                        endpointUrl = toChatCompletionsUrl(base),
                         apiKey = vault.primaryTunnelApiKey,
                         model = vault.primaryModelName.ifBlank { "dolphin-mistral" }
+                    )
+                )
+            }
+        }
+        vault.compatibleAiProviders.filter { it.enabled }.forEach { provider ->
+            val validation = NetworkSecurityValidator.validateEndpointUrl(provider.baseUrl)
+            if (validation.isValid && provider.name.isNotBlank() && provider.model.isNotBlank()) {
+                add(
+                    ProviderTarget.OpenAiCompatible(
+                        label = provider.name.trim(),
+                        endpointUrl = toChatCompletionsUrl(validation.normalizedUrl),
+                        apiKey = provider.apiKey.trim(),
+                        model = provider.model.trim()
                     )
                 )
             }
@@ -614,6 +654,16 @@ class AiStreamingClient(
         }
         if (vault.geminiApiKey.isNotBlank()) {
             add(ProviderTarget.GeminiFlash(vault.geminiApiKey))
+        }
+    }
+
+    private fun toChatCompletionsUrl(baseUrl: String): String {
+        val base = baseUrl.trimEnd('/')
+        return when {
+            base.endsWith("/chat/completions", ignoreCase = true) -> base
+            base.endsWith("/v1", ignoreCase = true) -> "$base/chat/completions"
+            base.endsWith("/openai", ignoreCase = true) -> "$base/chat/completions"
+            else -> "$base/v1/chat/completions"
         }
     }
 

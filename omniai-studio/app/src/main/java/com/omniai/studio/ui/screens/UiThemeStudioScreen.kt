@@ -437,17 +437,20 @@ fun UiThemeStudioScreen(
                     }
 
                     Text("Quick Floating Action Button (FAB)", style = MaterialTheme.typography.labelMedium, color = colorScheme.onSurfaceVariant)
-                    QuickFabAction.entries.chunked(3).forEach { rowItems ->
-                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            rowItems.forEach { action ->
-                                FilterChip(
-                                    selected = uiConfig.quickFabAction == action,
-                                    onClick = { viewModel.setQuickFabAction(action) },
-                                    label = { Text(action.label, maxLines = 1) },
-                                    modifier = Modifier.weight(1f)
-                                )
+                    QuickFabAction.entries
+                        .filterNot { it == QuickFabAction.QUICK_TERMINAL }
+                        .chunked(3)
+                        .forEach { rowItems ->
+                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                rowItems.forEach { action ->
+                                    FilterChip(
+                                        selected = uiConfig.quickFabAction == action,
+                                        onClick = { viewModel.setQuickFabAction(action) },
+                                        label = { Text(action.label, maxLines = 1) },
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                }
                             }
-                        }
                     }
 
                     HorizontalDivider(color = colorScheme.outline)

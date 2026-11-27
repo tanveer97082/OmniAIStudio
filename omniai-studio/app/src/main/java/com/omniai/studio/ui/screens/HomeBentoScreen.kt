@@ -83,6 +83,7 @@ fun HomeBentoScreen(
     val colorScheme = MaterialTheme.colorScheme
     val primaryColor = colorScheme.primary
 
+    val appSettings by viewModel.appSettings.collectAsState()
     val activeNiche by viewModel.activeNiche.collectAsState()
     val nextCommands by viewModel.activeNicheNextCommands.collectAsState()
     val seriesEpisodes by viewModel.activeNicheSeriesEpisodes.collectAsState()
@@ -147,6 +148,13 @@ nextPlannedEpisode != null -> nextPlannedEpisode.hookIdea.ifBlank { "Episode #${
                 borderColor = primaryColor.omniAccentBorder(),
                 contentPadding = OmniDesignTokens.CardInnerPadding
             ) {
+                if (appSettings.profileDisplayName.isNotBlank()) {
+                    Text(
+                        text = "Welcome back, ${appSettings.profileDisplayName}",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = colorScheme.primary
+                    )
+                }
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,

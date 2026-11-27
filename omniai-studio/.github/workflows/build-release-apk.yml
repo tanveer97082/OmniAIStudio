@@ -36,8 +36,7 @@ jobs:
         with:
           gradle-version: '8.5'
 
-      - name: Configure Optional Release Keystore
-        id: signing
+      - name: Configure Required Release Keystore
         working-directory: ./omniai-studio
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
@@ -45,20 +44,17 @@ jobs:
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASS: ${{ secrets.KEY_PASS }}
         run: |
-          if [[ -n "$KEYSTORE_BASE64" && -n "$KEYSTORE_PASS" && -n "$KEY_ALIAS" && -n "$KEY_PASS" ]]; then
-            echo "$KEYSTORE_BASE64" | base64 --decode > app/release-keystore.jks
-            echo "signed=true" >> "$GITHUB_OUTPUT"
-            echo "Release keystore decoded successfully. Building signed release APK."
-          else
-            echo "signed=false" >> "$GITHUB_OUTPUT"
-            echo "Release signing secrets not configured. Falling back to assembleDebug."
+          if [[ -z "$KEYSTORE_BASE64" || -z "$KEYSTORE_PASS" || -z "$KEY_ALIAS" || -z "$KEY_PASS" ]]; then
+            echo "::error::Configure KEYSTORE_BASE64, KEYSTORE_PASS, KEY_ALIAS, and KEY_PASS before publishing updates."
+            exit 1
           fi
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > app/release-keystore.jks
+          echo "Stable release keystore configured."
 
       - name: Build Signed Release APK
-        if: steps.signing.outputs.signed == 'true'
         working-directory: ./omniai-studio
         env:
-          KEYSTORE_PATH: app/release-keystore.jks
+          KEYSTORE_PATH: release-keystore.jks
           KEYSTORE_PASS: ${{ secrets.KEYSTORE_PASS }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASS: ${{ secrets.KEY_PASS }}
@@ -69,17 +65,6 @@ jobs:
             -PVERSION_NAME=${VERSION_NAME} \
             --no-daemon --stacktrace
           cp app/build/outputs/apk/release/app-release.apk "../../OmniAI-Studio-v${VERSION_NAME}.apk"
-
-      - name: Build Debug APK (Fallback)
-        if: steps.signing.outputs.signed != 'true'
-        working-directory: ./omniai-studio
-        run: |
-          chmod +x ./gradlew
-          ./gradlew assembleDebug \
-            -PVERSION_CODE=${VERSION_CODE} \
-            -PVERSION_NAME=${VERSION_NAME} \
-            --no-daemon --stacktrace
-          cp app/build/outputs/apk/debug/app-debug.apk "../../OmniAI-Studio-v${VERSION_NAME}.apk"
 
       - name: Compute APK SHA-256 Checksum
         run: |
@@ -106,7 +91,7 @@ jobs:
           body: |
             Automated build for **OmniAI-Studio v${{ env.VERSION_NAME }}** (versionCode `${{ env.VERSION_CODE }}`).
 
-            - Build Variant: `${{ steps.signing.outputs.signed == 'true' && 'Signed Release' || 'Debug Fallback' }}`
+            - Build Variant: `Signed Release`
             - Compile / Target SDK: Android 14 (API 34), Min SDK: API 26
             - On-Device Video Engine: AndroidX Media3 Transformer 1.2.1 + Kaggle Wan 2.1 Seamless Loop
             - v5.5 Cloud DB & RBAC: Pure OkHttp3 Supabase PostgreSQL GZIP Text-Only Delta Sync, Google OAuth 2.0 PKCE + Server-Enforced RLS Roles (`OWNER`/`EDITOR`/`VIEWER`/`PENDING`), Multi-Device Sync & Anti-Pause Cron

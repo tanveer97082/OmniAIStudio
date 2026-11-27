@@ -324,3 +324,38 @@ create policy "omni_sync_content_delete_owner_only"
         and public.is_approved_user()
         and public.get_my_role() = 'OWNER'
     );
+
+-- ============================================================================
+-- 7. PRIVATE PER-USER API CREDENTIALS (NEVER STORED IN omni_sync_records)
+-- ============================================================================
+create table if not exists public.user_api_credentials (
+    user_id uuid primary key references auth.users(id) on delete cascade,
+    credentials jsonb not null default '{}'::jsonb
+        check (jsonb_typeof(credentials) = 'object'),
+    updated_at bigint not null default ((extract(epoch from now()) * 1000)::bigint)
+);
+
+alter table public.user_api_credentials enable row level security;
+alter table public.user_api_credentials force row level security;
+
+revoke all on public.user_api_credentials from anon, public;
+grant select, insert, update, delete on public.user_api_credentials to authenticated;
+
+drop policy if exists "user_api_credentials_select_self" on public.user_api_credentials;
+drop policy if exists "user_api_credentials_insert_self" on public.user_api_credentials;
+drop policy if exists "user_api_credentials_update_self" on public.user_api_credentials;
+drop policy if exists "user_api_credentials_delete_self" on public.user_api_credentials;
+
+create policy "user_api_credentials_select_self"
+    on public.user_api_credentials for select to authenticated
+    using (auth.uid() = user_id);
+create policy "user_api_credentials_insert_self"
+    on public.user_api_credentials for insert to authenticated
+    with check (auth.uid() = user_id);
+create policy "user_api_credentials_update_self"
+    on public.user_api_credentials for update to authenticated
+    using (auth.uid() = user_id)
+    with check (auth.uid() = user_id);
+create policy "user_api_credentials_delete_self"
+    on public.user_api_credentials for delete to authenticated
+    using (auth.uid() = user_id);

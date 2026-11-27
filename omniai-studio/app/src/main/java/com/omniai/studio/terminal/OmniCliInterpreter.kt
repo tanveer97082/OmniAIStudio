@@ -12,6 +12,7 @@ import com.omniai.studio.backup.GitHubBackupSync
 import com.omniai.studio.backup.VaultBackupManager
 import com.omniai.studio.cloud.CloudSyncRepository
 import com.omniai.studio.cloud.SupabaseAuthManager
+import com.omniai.studio.cloud.UserApiCredentialsSchema
 import com.omniai.studio.data.local.AppSettingsRepository
 import com.omniai.studio.data.local.ContentDbExporter
 import com.omniai.studio.data.local.OmniAiDatabase
@@ -220,6 +221,24 @@ class OmniCliInterpreter(
                 runCloudUsers(onLine)
                 return OmniCliOutcome.HANDLED
             }
+            lower == "supabase schema" -> {
+                onLine("Run this once in Supabase Dashboard > SQL Editor. DDL cannot be run through the app's public API.", TerminalLineType.SYSTEM)
+                UserApiCredentialsSchema.SQL.trimIndent().lines().forEach { onLine(it, TerminalLineType.STDOUT) }
+                onLine("RLS permits each signed-in account to access only its own row. Supabase project administrators remain privileged.", TerminalLineType.SYSTEM)
+                return OmniCliOutcome.HANDLED
+            }
+            lower == "supabase keys push" -> {
+                runUserApiCredentialsPush(onLine)
+                return OmniCliOutcome.HANDLED
+            }
+            lower == "supabase keys pull" -> {
+                runUserApiCredentialsPull(onLine)
+                return OmniCliOutcome.HANDLED
+            }
+            lower == "supabase status" -> {
+                runCloudStatus(onLine)
+                return OmniCliOutcome.HANDLED
+            }
             lower == "health" -> {
                 runDeviceHealth(onLine)
                 return OmniCliOutcome.HANDLED
@@ -317,6 +336,10 @@ class OmniCliInterpreter(
         onLine("  cloud status         Show Google OAuth email, active RBAC role, last sync & GZIP savings", TerminalLineType.STDOUT)
         onLine("  cloud sync           Run two-way GZIP-compressed text delta sync with Supabase", TerminalLineType.STDOUT)
         onLine("  cloud users          (OWNER only) List registered accounts, devices & RBAC roles", TerminalLineType.STDOUT)
+        onLine("  supabase schema      Print the private API-credentials table + per-user RLS SQL", TerminalLineType.STDOUT)
+        onLine("  supabase keys push   Save configured API credentials to your signed-in account", TerminalLineType.STDOUT)
+        onLine("  supabase keys pull   Restore API credentials from your signed-in account", TerminalLineType.STDOUT)
+        onLine("  supabase status      Show Supabase configuration and signed-in status", TerminalLineType.STDOUT)
         onLine("  health               Check device thermal status, battery, RAM & free storage guard", TerminalLineType.STDOUT)
         onLine("  lan start|stop|status Control zero-dep Local Wi-Fi Web Studio (6-digit PIN)", TerminalLineType.STDOUT)
         onLine("  scan secrets         Run SecretLeakScanner across active project workspace", TerminalLineType.STDOUT)
@@ -1008,6 +1031,38 @@ class OmniCliInterpreter(
             }
         )
     }
+
+    private suspend fun runUserApiCredentialsPush(onLine: (String, TerminalLineType) -> Unit) =
+        withContext(Dispatchers.IO) {
+            onLine("Saving configured API credentials to the signed-in Supabase account...", TerminalLineType.SYSTEM)
+            cloudSyncRepository.pushUserApiCredentials().fold(
+                onSuccess = {
+                    onLine("Private API credentials saved. RLS blocks other app users; Supabase project administrators remain privileged.", TerminalLineType.SUCCESS)
+                },
+                onFailure = { error ->
+                    onLine("Supabase API credentials save failed: ${error.message}", TerminalLineType.STDERR)
+                }
+            )
+        }
+
+    private suspend fun runUserApiCredentialsPull(onLine: (String, TerminalLineType) -> Unit) =
+        withContext(Dispatchers.IO) {
+            onLine("Restoring API credentials for the signed-in Supabase account...", TerminalLineType.SYSTEM)
+            cloudSyncRepository.pullUserApiCredentials().fold(
+                onSuccess = { credentials ->
+                    if (credentials == null) {
+                        onLine("No API credentials are saved for this account yet.", TerminalLineType.STDOUT)
+                    } else if (vault.importUserApiCredentials(credentials)) {
+                        onLine("API credentials restored to this device's encrypted vault.", TerminalLineType.SUCCESS)
+                    } else {
+                        onLine("Could not save restored API credentials to the encrypted vault.", TerminalLineType.STDERR)
+                    }
+                },
+                onFailure = { error ->
+                    onLine("Supabase API credentials restore failed: ${error.message}", TerminalLineType.STDERR)
+                }
+            )
+        }
 
     private fun runDeviceHealth(onLine: (String, TerminalLineType) -> Unit) {
         val snap = deviceHealthGuard.inspect()

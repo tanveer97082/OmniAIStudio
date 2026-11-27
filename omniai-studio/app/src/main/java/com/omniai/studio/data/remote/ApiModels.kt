@@ -77,11 +77,19 @@ data class SocialMetadata(
 )
 
 @Serializable
+data class StoryboardDialogueLine(
+    @SerialName("character_name") val characterName: String = "Character",
+    val voice: String = "",
+    val text: String = ""
+)
+
+@Serializable
 data class StoryboardScene(
     @SerialName("scene_index") val sceneIndex: Int,
     @SerialName("visual_prompt") val visualPrompt: String,
     val narration: String,
-    @SerialName("duration_sec") val durationSec: Int = 5
+    @SerialName("duration_sec") val durationSec: Int = 5,
+    val dialogue: List<StoryboardDialogueLine> = emptyList()
 )
 
 @Serializable
@@ -118,6 +126,43 @@ data class KaggleAccountCredential(
     val apiKey: String,
     val datasetSlug: String = "video-tasks-input",
     val kernelSlug: String = "omniai-wan21-dual-gpu-worker"
+)
+
+@Serializable
+data class CompatibleAiProviderConfig(
+    val id: String,
+    val name: String,
+    val baseUrl: String,
+    val model: String,
+    val apiKey: String = "",
+    val enabled: Boolean = true
+)
+
+@Serializable
+data class PlatformApiCredential(
+    val id: String,
+    val platformName: String,
+    val accountLabel: String = "",
+    val endpointUrl: String = "",
+    val apiKey: String = "",
+    val apiSecret: String = "",
+    val extraCredentials: String = ""
+)
+
+@Serializable
+data class TrendNicheSuggestion(
+    val name: String,
+    val emoji: String = "🔎",
+    val description: String = "",
+    val systemPromptRules: String = "",
+    val visualStylePreset: String = "Cinematic Realism"
+)
+
+@Serializable
+data class TrendDiscoveryReport(
+    val relevantTrends: List<String> = emptyList(),
+    val nicheIdeas: List<TrendNicheSuggestion> = emptyList(),
+    val themeIdeas: List<String> = emptyList()
 )
 
 @Serializable
@@ -189,6 +234,9 @@ data class VaultSnapshot(
     val huggingFaceModel: String = "Qwen/Qwen2.5-72B-Instruct",
     val geminiApiKey: String = "",
     val autoFallbackEnabled: Boolean = true,
+    val compatibleAiProviders: List<CompatibleAiProviderConfig> = emptyList(),
+    val platformApiCredentials: List<PlatformApiCredential> = emptyList(),
+    val braveSearchApiKey: String = "",
     val kaggleUsername: String = "",
     val kaggleApiKey: String = "",
     val kaggleDatasetSlug: String = "video-tasks-input",

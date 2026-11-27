@@ -57,8 +57,10 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -72,17 +74,16 @@ import com.omniai.studio.media.StorageGalleryHelper
 import com.omniai.studio.security.AutoLockTimeout
 import com.omniai.studio.security.BiometricAuthManager
 import com.omniai.studio.security.VaultManager
+import com.omniai.studio.data.remote.CompatibleAiProviderConfig
+import com.omniai.studio.data.remote.PlatformApiCredential
 import com.omniai.studio.ui.guides.PlatformGuideBottomSheet
 import com.omniai.studio.ui.guides.PlatformGuideId
 import com.omniai.studio.ui.guides.PlatformGuideTriggerButton
 import com.omniai.studio.ui.theme.AmberWarning
-import com.omniai.studio.ui.theme.AmoledBlack
-import com.omniai.studio.ui.theme.AmoledBorder
-import com.omniai.studio.ui.theme.AmoledSurface
 import com.omniai.studio.ui.theme.CrimsonDanger
 import com.omniai.studio.ui.theme.EmeraldAccent
-import com.omniai.studio.ui.theme.TextSecondary
 import com.omniai.studio.viewmodel.OmniAiViewModel
+import java.util.UUID
 
 private data class QuickProviderPreset(
     val label: String,
@@ -94,10 +95,18 @@ private val QUICK_PROVIDER_PRESETS = listOf(
     QuickProviderPreset("Local Termux/Ollama (127.0.0.1:8080/v1)", "http://127.0.0.1:8080/v1", "llama3.1:8b"),
     QuickProviderPreset("Cloudflare Tunnel", "https://omniai-tunnel.trycloudflare.com/v1", "mistral-nemo"),
     QuickProviderPreset("Hugging Face Router", "https://router.huggingface.co/v1", "Qwen/Qwen2.5-72B-Instruct"),
+    QuickProviderPreset("DeepSeek", "https://api.deepseek.com", "deepseek-chat"),
+    QuickProviderPreset("OpenAI", "https://api.openai.com/v1", "gpt-4o-mini"),
     QuickProviderPreset("Groq", "https://api.groq.com/openai/v1", "llama-3.3-70b-versatile"),
     QuickProviderPreset("OpenRouter", "https://openrouter.ai/api/v1", "deepseek/deepseek-chat"),
+    QuickProviderPreset("Mistral", "https://api.mistral.ai/v1", "mistral-small-latest"),
+    QuickProviderPreset("Together AI", "https://api.together.xyz/v1", "meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo"),
+    QuickProviderPreset("Fireworks AI", "https://api.fireworks.ai/inference/v1", "accounts/fireworks/models/llama-v3p1-8b-instruct"),
+    QuickProviderPreset("Cerebras", "https://api.cerebras.ai/v1", "llama3.1-8b"),
     QuickProviderPreset("Gemini API", "https://generativelanguage.googleapis.com/v1beta/openai", "gemini-2.5-flash")
 )
+
+private val API_PROVIDER_TABS = listOf("Primary AI", "Hugging Face", "Gemini", "Kaggle", "GitHub", "Other APIs")
 
 @Composable
 fun VaultSettingsScreen(
@@ -112,7 +121,9 @@ fun VaultSettingsScreen(
     val clipboard = LocalClipboardManager.current
     val snapshot by viewModel.vaultSnapshot.collectAsState()
     val cloudRole by viewModel.cloudRole.collectAsState()
+    val cloudSession by viewModel.cloudSessionState.collectAsState()
     val roleCapabilities by viewModel.roleCapabilities.collectAsState()
+    val isApiCredentialsCloudBusy by viewModel.isApiCredentialsCloudBusy.collectAsState()
     val pingResults by viewModel.pingResults.collectAsState()
     val isPinging by viewModel.isPinging.collectAsState()
     val otaState by viewModel.otaState.collectAsState()
@@ -129,9 +140,12 @@ fun VaultSettingsScreen(
     val activeYouTubeProfileId by viewModel.activeYouTubeProfileId.collectAsState()
 
     var draft by remember(snapshot) { mutableStateOf(snapshot) }
+    var selectedApiProvider by rememberSaveable { mutableIntStateOf(0) }
     var secretsUnlocked by remember { mutableStateOf(false) }
     var urlError by remember { mutableStateOf<String?>(null) }
     var activeGuideId by remember { mutableStateOf<PlatformGuideId?>(null) }
+    var showCompatibleProvidersDialog by remember { mutableStateOf(false) }
+    var showPlatformCredentialsDialog by remember { mutableStateOf(false) }
 
     var poolLabel by remember { mutableStateOf("") }
     var poolUsername by remember { mutableStateOf("") }
@@ -165,6 +179,15 @@ fun VaultSettingsScreen(
         }
     }
 
+    val selectedProviderConfigured = when (selectedApiProvider) {
+        0 -> draft.primaryTunnelUrl.isNotBlank() && draft.primaryModelName.isNotBlank()
+        1 -> draft.huggingFaceToken.isNotBlank()
+        2 -> draft.geminiApiKey.isNotBlank()
+        3 -> draft.kaggleUsername.isNotBlank() && draft.kaggleApiKey.isNotBlank()
+        4 -> draft.githubRepo.isNotBlank() && draft.githubToken.isNotBlank()
+        else -> draft.braveSearchApiKey.isNotBlank() || draft.platformApiCredentials.isNotEmpty()
+    }
+
     fun requireBiometricThen(reason: String, onVerified: () -> Unit) {
         if (!snapshot.vaultLockEnabled) {
             onVerified()
@@ -182,7 +205,7 @@ fun VaultSettingsScreen(
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
-            .background(AmoledBlack)
+            .background(MaterialTheme.colorScheme.background)
             .padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
@@ -193,11 +216,11 @@ fun VaultSettingsScreen(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Column {
-                    Text("Encrypted Vault & OTA", style = MaterialTheme.typography.headlineSmall)
+                    Text("API & Secure Vault", style = MaterialTheme.typography.headlineSmall)
                     Text(
-                        "AES-256-GCM Hardware Keystore · Build v${BuildConfig.VERSION_NAME}",
+                        "Manage AI providers, API keys, and app security · v${BuildConfig.VERSION_NAME}",
                         style = MaterialTheme.typography.labelMedium,
-                        color = TextSecondary
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
                 OutlinedButton(
@@ -232,8 +255,8 @@ fun VaultSettingsScreen(
         // v5.5 Supabase PostgreSQL Cloud DB, Google OAuth PKCE & Server-Enforced RBAC Card
         item {
             Card(
-                colors = CardDefaults.cardColors(containerColor = AmoledSurface),
-                border = BorderStroke(1.dp, AmoledBorder)
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
             ) {
                 Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Row(
@@ -246,7 +269,7 @@ fun VaultSettingsScreen(
                             Text(
                                 "Compressed text-only delta sync (<=256 KB/row) · Role: ${cloudRole.badgeText}",
                                 style = MaterialTheme.typography.labelMedium,
-                                color = TextSecondary
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
                         PlatformGuideTriggerButton(
@@ -307,297 +330,388 @@ fun VaultSettingsScreen(
         // Multi-Profile AI, Kaggle & GitHub Config
         item {
             Card(
-                colors = CardDefaults.cardColors(containerColor = AmoledSurface),
-                border = BorderStroke(1.dp, AmoledBorder)
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
             ) {
-                Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Row(
+                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Column(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
-                        Text("AI Provider Failover Chain", style = MaterialTheme.typography.titleMedium)
-                        OutlinedButton(onClick = onOpenSettingsHub) {
-                            Icon(Icons.Filled.Settings, contentDescription = null)
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("Settings Hub")
-                        }
-                    }
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text("Quick Provider Presets", style = MaterialTheme.typography.labelMedium, color = TextSecondary)
-                        OutlinedButton(
-                            onClick = { viewModel.scanLocalhostPorts() },
-                            enabled = !isScanningLocalhost
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Icon(Icons.Filled.Radar, contentDescription = null)
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text(if (isScanningLocalhost) "Scanning..." else "Scan Localhost")
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("APIs & Integrations", style = MaterialTheme.typography.titleLarge)
+                                Text(
+                                    "AI providers, cloud services, and automation",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            OutlinedButton(onClick = onOpenSettingsHub) {
+                                Icon(Icons.Filled.Settings, contentDescription = null)
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Settings")
+                            }
                         }
-                    }
 
-                    if (localCandidates.isNotEmpty()) {
-                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                            localCandidates.forEach { candidate ->
+                        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            items(API_PROVIDER_TABS.indices.toList()) { index ->
+                                FilterChip(
+                                    selected = selectedApiProvider == index,
+                                    onClick = {
+                                        selectedApiProvider = index
+                                        urlError = null
+                                    },
+                                    label = { Text(API_PROVIDER_TABS[index]) }
+                                )
+                            }
+                        }
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                if (selectedProviderConfigured) "Configuration ready" else "Setup needed",
+                                style = MaterialTheme.typography.labelLarge,
+                                color = if (selectedProviderConfigured) EmeraldAccent else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Text(
+                                "${selectedApiProvider + 1} of ${API_PROVIDER_TABS.size}",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+
+                        if (selectedApiProvider == 0) {
+                            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                OutlinedButton(
+                                    onClick = { showCompatibleProvidersDialog = true },
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Text("Manage additional AI providers (${draft.compatibleAiProviders.size})")
+                                }
+                                Text(
+                                    "Supports DeepSeek, OpenAI and other OpenAI-compatible APIs. Copilot consumer and Meta AI apps do not expose general-purpose public API keys; use an official compatible provider endpoint instead.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
                                     horizontalArrangement = Arrangement.SpaceBetween,
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Column(modifier = Modifier.weight(1f)) {
-                                        Text(
-                                            text = "${candidate.baseUrl} (${candidate.serviceHint})",
-                                            style = MaterialTheme.typography.labelMedium
-                                        )
-                                        Text(
-                                            text = if (candidate.reachable) {
-                                                "ONLINE · ${candidate.latencyMs}ms" +
-                                                    if (candidate.detectedModel.isNotBlank()) " · ${candidate.detectedModel}" else ""
-                                            } else {
-                                                "OFFLINE (1s probe)"
-                                            },
-                                            style = MaterialTheme.typography.labelMedium,
-                                            color = if (candidate.reachable) EmeraldAccent else TextSecondary
-                                        )
+                                    Text("Quick setup", style = MaterialTheme.typography.titleSmall)
+                                    OutlinedButton(
+                                        onClick = { viewModel.scanLocalhostPorts() },
+                                        enabled = !isScanningLocalhost
+                                    ) {
+                                        Icon(Icons.Filled.Radar, contentDescription = null)
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text(if (isScanningLocalhost) "Scanning..." else "Find local AI")
                                     }
-                                    if (candidate.reachable) {
-                                        OutlinedButton(onClick = {
-                                            draft = draft.copy(
-                                                primaryTunnelUrl = candidate.baseUrl,
-                                                primaryModelName = candidate.detectedModel.ifBlank { draft.primaryModelName }
-                                            )
-                                            viewModel.applyDetectedLocalServer(candidate)
-                                        }) {
-                                            Text("Use")
+                                }
+
+                                if (localCandidates.isNotEmpty()) {
+                                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                        localCandidates.forEach { candidate ->
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                horizontalArrangement = Arrangement.SpaceBetween,
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Column(modifier = Modifier.weight(1f)) {
+                                                    Text(
+                                                        text = "${candidate.baseUrl} (${candidate.serviceHint})",
+                                                        style = MaterialTheme.typography.labelMedium
+                                                    )
+                                                    Text(
+                                                        text = if (candidate.reachable) {
+                                                            "ONLINE · ${candidate.latencyMs}ms" +
+                                                                if (candidate.detectedModel.isNotBlank()) " · ${candidate.detectedModel}" else ""
+                                                        } else {
+                                                            "OFFLINE (1s probe)"
+                                                        },
+                                                        style = MaterialTheme.typography.labelMedium,
+                                                        color = if (candidate.reachable) EmeraldAccent else MaterialTheme.colorScheme.onSurfaceVariant
+                                                    )
+                                                }
+                                                if (candidate.reachable) {
+                                                    OutlinedButton(onClick = {
+                                                        draft = draft.copy(
+                                                            primaryTunnelUrl = candidate.baseUrl,
+                                                            primaryModelName = candidate.detectedModel.ifBlank { draft.primaryModelName }
+                                                        )
+                                                        viewModel.applyDetectedLocalServer(candidate)
+                                                    }) {
+                                                        Text("Use")
+                                                    }
+                                                }
+                                            }
                                         }
+                                    }
+                                }
+
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text("Provider presets", style = MaterialTheme.typography.labelLarge)
+                                    PlatformGuideTriggerButton(
+                                        label = "Provider guide",
+                                        onClick = { activeGuideId = PlatformGuideId.GROQ_OPENROUTER }
+                                    )
+                                }
+
+                                LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    items(QUICK_PROVIDER_PRESETS) { preset ->
+                                        FilterChip(
+                                            selected = draft.primaryTunnelUrl.equals(preset.baseUrl, ignoreCase = true),
+                                            onClick = {
+                                                draft = draft.copy(
+                                                    primaryTunnelUrl = preset.baseUrl,
+                                                    primaryModelName = preset.modelId
+                                                )
+                                                urlError = null
+                                                viewModel.postToast("Applied preset: ${preset.label}")
+                                            },
+                                            label = { Text(preset.label, maxLines = 1) }
+                                        )
                                     }
                                 }
                             }
                         }
                     }
 
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text("Groq / OpenRouter / Local Presets", style = MaterialTheme.typography.labelMedium, color = TextSecondary)
-                        PlatformGuideTriggerButton(
-                            label = "? Groq / OpenRouter Guide",
-                            onClick = { activeGuideId = PlatformGuideId.GROQ_OPENROUTER }
-                        )
-                    }
-
-                    LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        items(QUICK_PROVIDER_PRESETS) { preset ->
-                            FilterChip(
-                                selected = draft.primaryTunnelUrl.equals(preset.baseUrl, ignoreCase = true),
-                                onClick = {
-                                    draft = draft.copy(
-                                        primaryTunnelUrl = preset.baseUrl,
-                                        primaryModelName = preset.modelId
-                                    )
-                                    urlError = null
-                                    viewModel.postToast("Applied preset: ${preset.label}")
-                                },
-                                label = { Text(preset.label, maxLines = 1) }
+                    when (selectedApiProvider) {
+                        0 -> Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            ProviderSettingsHeader(
+                                title = "Primary AI endpoint",
+                                description = "OpenAI-compatible tunnel, local server, or hosted API.",
+                                guideId = PlatformGuideId.UNCENSORED_TUNNEL,
+                                onOpenGuide = { activeGuideId = it }
                             )
+
+                            OutlinedTextField(
+                                value = draft.primaryTunnelUrl,
+                                onValueChange = { draft = draft.copy(primaryTunnelUrl = it); urlError = null },
+                                label = { Text("Base URL") },
+                                placeholder = { Text("https://api.example.com/v1") },
+                                modifier = Modifier.fillMaxWidth(),
+                                singleLine = true
+                            )
+                            SecretVaultField(
+                                label = "API key",
+                                value = draft.primaryTunnelApiKey,
+                                unlocked = secretsUnlocked,
+                                onValueChange = { draft = draft.copy(primaryTunnelApiKey = it) },
+                                onCopy = {
+                                    requireBiometricThen("Authenticate to copy Primary Tunnel Key") {
+                                        clipboard.setText(AnnotatedString(draft.primaryTunnelApiKey))
+                                        viewModel.postToast("Copied Primary Tunnel Key.")
+                                    }
+                                }
+                            )
+
+                            OutlinedTextField(
+                                value = draft.primaryModelName,
+                                onValueChange = { draft = draft.copy(primaryModelName = it) },
+                                label = { Text("Model ID") },
+                                placeholder = { Text("e.g. llama-3.3-70b-versatile") },
+                                modifier = Modifier.fillMaxWidth(),
+                                singleLine = true
+                            )
+                        }
+
+                        1 -> Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            ProviderSettingsHeader(
+                                title = "Hugging Face",
+                                description = "Secondary provider used when the primary endpoint is unavailable.",
+                                guideId = PlatformGuideId.HUGGING_FACE,
+                                onOpenGuide = { activeGuideId = it }
+                            )
+
+                            SecretVaultField(
+                                label = "Hugging Face access token",
+                                value = draft.huggingFaceToken,
+                                unlocked = secretsUnlocked,
+                                onValueChange = { draft = draft.copy(huggingFaceToken = it) },
+                                onCopy = {
+                                    requireBiometricThen("Authenticate to copy Hugging Face Token") {
+                                        clipboard.setText(AnnotatedString(draft.huggingFaceToken))
+                                        viewModel.postToast("Copied Hugging Face Token.")
+                                    }
+                                }
+                            )
+
+                            OutlinedTextField(
+                                value = draft.huggingFaceModel,
+                                onValueChange = { draft = draft.copy(huggingFaceModel = it) },
+                                label = { Text("Model ID") },
+                                placeholder = { Text("e.g. Qwen/Qwen2.5-72B-Instruct") },
+                                modifier = Modifier.fillMaxWidth(),
+                                singleLine = true
+                            )
+
+                            OutlinedButton(
+                                onClick = { showHfExplorer = true },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Icon(Icons.Filled.Search, contentDescription = null)
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Browse models")
+                            }
+                        }
+
+                        2 -> Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            ProviderSettingsHeader(
+                                title = "Google Gemini",
+                                description = "Use Gemini 2.5 Flash with optional key-pool rotation.",
+                                guideId = PlatformGuideId.GEMINI,
+                                onOpenGuide = { activeGuideId = it }
+                            )
+
+                            SecretVaultField(
+                                label = "Gemini API key",
+                                value = draft.geminiApiKey,
+                                unlocked = secretsUnlocked,
+                                onValueChange = { draft = draft.copy(geminiApiKey = it) },
+                                onCopy = {
+                                    requireBiometricThen("Authenticate to copy Gemini API Key") {
+                                        clipboard.setText(AnnotatedString(draft.geminiApiKey))
+                                        viewModel.postToast("Copied Gemini API Key.")
+                                    }
+                                }
+                            )
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text("Automatic fallback", style = MaterialTheme.typography.bodyMedium)
+                                    Text(
+                                        "Retry the next provider after timeouts or server errors.",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                Switch(
+                                    checked = draft.autoFallbackEnabled,
+                                    onCheckedChange = { draft = draft.copy(autoFallbackEnabled = it) }
+                                )
+                            }
+                        }
+
+                        3 -> Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            ProviderSettingsHeader(
+                                title = "Kaggle GPU worker",
+                                description = "Credentials for Kaggle API and remote render jobs.",
+                                guideId = PlatformGuideId.KAGGLE_WORKER,
+                                onOpenGuide = { activeGuideId = it }
+                            )
+
+                            OutlinedTextField(
+                                value = draft.kaggleUsername,
+                                onValueChange = { draft = draft.copy(kaggleUsername = it) },
+                                label = { Text("Kaggle username") },
+                                modifier = Modifier.fillMaxWidth(),
+                                singleLine = true
+                            )
+
+                            SecretVaultField(
+                                label = "Kaggle API key",
+                                value = draft.kaggleApiKey,
+                                unlocked = secretsUnlocked,
+                                onValueChange = { draft = draft.copy(kaggleApiKey = it) },
+                                onCopy = {
+                                    requireBiometricThen("Authenticate to copy Kaggle Key") {
+                                        clipboard.setText(AnnotatedString(draft.kaggleApiKey))
+                                        viewModel.postToast("Copied Kaggle API Key.")
+                                    }
+                                }
+                            )
+                        }
+
+                        4 -> Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            ProviderSettingsHeader(
+                                title = "GitHub automation",
+                                description = "Repository and token for CI/CD and project sync.",
+                                guideId = PlatformGuideId.GITHUB_CICD,
+                                onOpenGuide = { activeGuideId = it }
+                            )
+
+                            OutlinedTextField(
+                                value = draft.githubRepo,
+                                onValueChange = { draft = draft.copy(githubRepo = it) },
+                                label = { Text("Repository (owner/name)") },
+                                placeholder = { Text("owner/OmniAI-Studio") },
+                                modifier = Modifier.fillMaxWidth(),
+                                singleLine = true
+                            )
+
+                            SecretVaultField(
+                                label = "Personal access token",
+                                value = draft.githubToken,
+                                unlocked = secretsUnlocked,
+                                onValueChange = { draft = draft.copy(githubToken = it) },
+                                onCopy = {
+                                    requireBiometricThen("Authenticate to copy GitHub Token") {
+                                        clipboard.setText(AnnotatedString(draft.githubToken))
+                                        viewModel.postToast("Copied GitHub Token.")
+                                    }
+                                }
+                            )
+                        }
+
+                        5 -> Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Text(
+                                "Other platform credentials",
+                                style = MaterialTheme.typography.titleMedium,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            Text(
+                                "Kaggle, Hugging Face, GitHub, YouTube, Meta, Telegram, Gemini, and Supabase already have dedicated app integrations. Other saved credentials are secure storage only until an app workflow is added; they are not sent to those vendors automatically.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            OutlinedTextField(
+                                value = draft.braveSearchApiKey,
+                                onValueChange = { draft = draft.copy(braveSearchApiKey = it) },
+                                label = { Text("Brave Search API key (optional)") },
+                                visualTransformation = PasswordVisualTransformation(),
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                            Text(
+                                "Used only when you manually search Trends & Niches. The key is sent in an HTTPS request header, not included in the search URL.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            OutlinedButton(
+                                onClick = { showPlatformCredentialsDialog = true },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text("Manage saved platform credentials (${draft.platformApiCredentials.size})")
+                            }
                         }
                     }
 
-                    HorizontalDivider(color = AmoledBorder)
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text("1. Uncensored AI (Colab / Termux)", style = MaterialTheme.typography.titleSmall)
-                        PlatformGuideTriggerButton(
-                            onClick = { activeGuideId = PlatformGuideId.UNCENSORED_TUNNEL }
-                        )
-                    }
-
-                    OutlinedTextField(
-                        value = draft.primaryTunnelUrl,
-                        onValueChange = { draft = draft.copy(primaryTunnelUrl = it); urlError = null },
-                        label = { Text("Primary Uncensored Tunnel URL (HTTPS or localhost)") },
-                        modifier = Modifier.fillMaxWidth(),
-                        singleLine = true
-                    )
                     if (urlError != null) {
                         Text(urlError.orEmpty(), color = CrimsonDanger, style = MaterialTheme.typography.labelMedium)
                     }
-
-                    SecretVaultField(
-                        label = "Primary Tunnel API Key",
-                        value = draft.primaryTunnelApiKey,
-                        unlocked = secretsUnlocked,
-                        onValueChange = { draft = draft.copy(primaryTunnelApiKey = it) },
-                        onCopy = {
-                            requireBiometricThen("Authenticate to copy Primary Tunnel Key") {
-                                clipboard.setText(AnnotatedString(draft.primaryTunnelApiKey))
-                                viewModel.postToast("Copied Primary Tunnel Key.")
-                            }
-                        }
+                    Text(
+                        "Credentials are stored in your encrypted vault.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
-
-                    OutlinedTextField(
-                        value = draft.primaryModelName,
-                        onValueChange = { draft = draft.copy(primaryModelName = it) },
-                        label = { Text("Primary Model ID") },
-                        modifier = Modifier.fillMaxWidth(),
-                        singleLine = true
-                    )
-
-                    HorizontalDivider(color = AmoledBorder)
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text("2. Hugging Face Serverless", style = MaterialTheme.typography.titleSmall)
-                        PlatformGuideTriggerButton(
-                            onClick = { activeGuideId = PlatformGuideId.HUGGING_FACE }
-                        )
-                    }
-
-                    SecretVaultField(
-                        label = "Secondary Hugging Face Token",
-                        value = draft.huggingFaceToken,
-                        unlocked = secretsUnlocked,
-                        onValueChange = { draft = draft.copy(huggingFaceToken = it) },
-                        onCopy = {
-                            requireBiometricThen("Authenticate to copy Hugging Face Token") {
-                                clipboard.setText(AnnotatedString(draft.huggingFaceToken))
-                                viewModel.postToast("Copied Hugging Face Token.")
-                            }
-                        }
-                    )
-
-                    OutlinedTextField(
-                        value = draft.huggingFaceModel,
-                        onValueChange = { draft = draft.copy(huggingFaceModel = it) },
-                        label = { Text("Secondary Hugging Face Model") },
-                        modifier = Modifier.fillMaxWidth(),
-                        singleLine = true
-                    )
-
-                    OutlinedButton(
-                        onClick = { showHfExplorer = true },
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Icon(Icons.Filled.Search, contentDescription = null)
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("Browse HF Models (Downloads · GGUF)")
-                    }
-
-                    HorizontalDivider(color = AmoledBorder)
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text("3. Google Gemini API & Pool", style = MaterialTheme.typography.titleSmall)
-                        PlatformGuideTriggerButton(
-                            onClick = { activeGuideId = PlatformGuideId.GEMINI }
-                        )
-                    }
-
-                    SecretVaultField(
-                        label = "Tertiary Gemini 2.5 Flash Key (Comma-Separated Pool OK)",
-                        value = draft.geminiApiKey,
-                        unlocked = secretsUnlocked,
-                        onValueChange = { draft = draft.copy(geminiApiKey = it) },
-                        onCopy = {
-                            requireBiometricThen("Authenticate to copy Gemini API Key") {
-                                clipboard.setText(AnnotatedString(draft.geminiApiKey))
-                                viewModel.postToast("Copied Gemini API Key.")
-                            }
-                        }
-                    )
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text("Auto-Fallback on Timeout / 429 / 5xx", style = MaterialTheme.typography.bodyMedium)
-                        Switch(
-                            checked = draft.autoFallbackEnabled,
-                            onCheckedChange = { draft = draft.copy(autoFallbackEnabled = it) }
-                        )
-                    }
-
-                    HorizontalDivider(color = AmoledBorder)
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text("4. Kaggle T4 x2 GPU Worker", style = MaterialTheme.typography.titleSmall)
-                        PlatformGuideTriggerButton(
-                            onClick = { activeGuideId = PlatformGuideId.KAGGLE_WORKER }
-                        )
-                    }
-
-                    OutlinedTextField(
-                        value = draft.kaggleUsername,
-                        onValueChange = { draft = draft.copy(kaggleUsername = it) },
-                        label = { Text("Kaggle Username") },
-                        modifier = Modifier.fillMaxWidth(),
-                        singleLine = true
-                    )
-
-                    SecretVaultField(
-                        label = "Kaggle API Key",
-                        value = draft.kaggleApiKey,
-                        unlocked = secretsUnlocked,
-                        onValueChange = { draft = draft.copy(kaggleApiKey = it) },
-                        onCopy = {
-                            requireBiometricThen("Authenticate to copy Kaggle Key") {
-                                clipboard.setText(AnnotatedString(draft.kaggleApiKey))
-                                viewModel.postToast("Copied Kaggle API Key.")
-                            }
-                        }
-                    )
-
-                    HorizontalDivider(color = AmoledBorder)
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text("5. GitHub CI/CD & Auto-Push", style = MaterialTheme.typography.titleSmall)
-                        PlatformGuideTriggerButton(
-                            onClick = { activeGuideId = PlatformGuideId.GITHUB_CICD }
-                        )
-                    }
-
-                    OutlinedTextField(
-                        value = draft.githubRepo,
-                        onValueChange = { draft = draft.copy(githubRepo = it) },
-                        label = { Text("GitHub Repo (owner/OmniAI-Studio)") },
-                        modifier = Modifier.fillMaxWidth(),
-                        singleLine = true
-                    )
-
-                    SecretVaultField(
-                        label = "GitHub PAT (repo + workflow scopes)",
-                        value = draft.githubToken,
-                        unlocked = secretsUnlocked,
-                        onValueChange = { draft = draft.copy(githubToken = it) },
-                        onCopy = {
-                            requireBiometricThen("Authenticate to copy GitHub Token") {
-                                clipboard.setText(AnnotatedString(draft.githubToken))
-                                viewModel.postToast("Copied GitHub Token.")
-                            }
-                        }
-                    )
-
                     Button(
                         onClick = {
                             urlError = viewModel.saveVaultConfiguration(draft)
@@ -607,7 +721,57 @@ fun VaultSettingsScreen(
                     ) {
                         Icon(Icons.Filled.Save, contentDescription = null)
                         Spacer(modifier = Modifier.width(6.dp))
-                        Text(if (roleCapabilities.canWriteVault) "Save Encrypted Vault" else "Save Encrypted Vault (Owner Only)")
+                        Text(if (roleCapabilities.canWriteVault) "Save API Settings" else "Owner Only")
+                    }
+                    Text(
+                        text = if (cloudSession.isSignedIn) {
+                            "Private cloud account: ${cloudSession.email.ifBlank { cloudSession.userId }}"
+                        } else {
+                            "Sign in to Supabase to back up API settings to your account."
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        "RLS prevents other signed-in users from reading your row. Supabase project administrators remain privileged.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedButton(
+                            onClick = {
+                                requireBiometricThen("Authenticate to save API credentials to your account") {
+                                    urlError = viewModel.saveVaultConfiguration(draft)
+                                    if (urlError == null) viewModel.pushUserApiCredentials()
+                                }
+                            },
+                            enabled = roleCapabilities.canWriteVault &&
+                                cloudSession.isSignedIn &&
+                                !isApiCredentialsCloudBusy,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(Icons.Filled.CloudSync, contentDescription = null)
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(if (isApiCredentialsCloudBusy) "Saving..." else "Save to my account")
+                        }
+                        OutlinedButton(
+                            onClick = {
+                                requireBiometricThen("Authenticate to restore API credentials from your account") {
+                                    viewModel.pullUserApiCredentials()
+                                }
+                            },
+                            enabled = roleCapabilities.canWriteVault &&
+                                cloudSession.isSignedIn &&
+                                !isApiCredentialsCloudBusy,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(Icons.Filled.CloudSync, contentDescription = null)
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(if (isApiCredentialsCloudBusy) "Working..." else "Restore")
+                        }
                     }
                 }
             }
@@ -616,8 +780,8 @@ fun VaultSettingsScreen(
         // v5.2 Dedicated Telegram Bot & 2 GB Direct Kaggle Upload Card
         item {
             Card(
-                colors = CardDefaults.cardColors(containerColor = AmoledSurface),
-                border = BorderStroke(1.dp, AmoledBorder)
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
             ) {
                 Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Row(
@@ -630,7 +794,7 @@ fun VaultSettingsScreen(
                             Text(
                                 "Encrypted MTProto keys for headless 2 GB uploads directly from Kaggle GPU",
                                 style = MaterialTheme.typography.labelMedium,
-                                color = TextSecondary
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
                         PlatformGuideTriggerButton(
@@ -752,8 +916,8 @@ fun VaultSettingsScreen(
         // Live Ping & Auth Connection Tester
         item {
             Card(
-                colors = CardDefaults.cardColors(containerColor = AmoledSurface),
-                border = BorderStroke(1.dp, AmoledBorder)
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
             ) {
                 Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Row(
@@ -786,7 +950,7 @@ fun VaultSettingsScreen(
                         }
                     }
 
-                    HorizontalDivider(color = AmoledBorder)
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outline)
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -794,7 +958,7 @@ fun VaultSettingsScreen(
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
                             Text("Tunnel Health Watchdog (WorkManager)", style = MaterialTheme.typography.bodyMedium)
-                            Text("Alerts if Primary Tunnel /models drops offline", style = MaterialTheme.typography.labelMedium, color = TextSecondary)
+                            Text("Alerts if Primary Tunnel /models drops offline", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                         Switch(
                             checked = tunnelWatchdogEnabled,
@@ -802,8 +966,8 @@ fun VaultSettingsScreen(
                         )
                     }
 
-                    HorizontalDivider(color = AmoledBorder)
-                    Text("Quick-Launch Workspace Bookmarks", style = MaterialTheme.typography.labelMedium, color = TextSecondary)
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outline)
+                    Text("Quick-Launch Workspace Bookmarks", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         val bookmarks = listOf(
                             "Termux App" to "termux://",
@@ -841,15 +1005,15 @@ fun VaultSettingsScreen(
         // v2.0 Multi-Account Kaggle GPU Pool (Auto-Rotates < 1.0 hr remaining)
         item {
             Card(
-                colors = CardDefaults.cardColors(containerColor = AmoledSurface),
-                border = BorderStroke(1.dp, AmoledBorder)
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
             ) {
                 Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("Multi-Account Kaggle Pool (Auto-Rotate < 1h)", style = MaterialTheme.typography.titleMedium)
                     Text(
                         "Store multiple Kaggle accounts in EncryptedSharedPreferences. When weekly GPU quota drops below 1.0 hr, the render queue rotates automatically.",
                         style = MaterialTheme.typography.labelMedium,
-                        color = TextSecondary
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     kaggleAccounts.forEach { acct ->
                         Row(
@@ -916,15 +1080,15 @@ fun VaultSettingsScreen(
         // v5.3 YouTube Data API v3 (Multi-Channel OAuth2 Vault + Setup Guide)
         item {
             Card(
-                colors = CardDefaults.cardColors(containerColor = AmoledSurface),
-                border = BorderStroke(1.dp, AmoledBorder)
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
             ) {
                 Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("YouTube Data API v3 (Multi-Channel Auto-Uploader)", style = MaterialTheme.typography.titleMedium)
                     Text(
                         "Pure OkHttp3 OAuth2 refresh + 2 MB chunked resumable uploader. Map channels to individual Niches.",
                         style = MaterialTheme.typography.labelMedium,
-                        color = TextSecondary
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     PlatformGuideTriggerButton(
                         label = "? Setup Guide & Commands",
@@ -980,7 +1144,7 @@ fun VaultSettingsScreen(
                         }
                     }
 
-                    HorizontalDivider(color = AmoledBorder)
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outline)
                     Text("Multi-Channel Pool (${youTubeProfiles.size} channel(s))", style = MaterialTheme.typography.labelMedium, color = EmeraldAccent)
                     youTubeProfiles.forEach { profile ->
                         Row(
@@ -1055,15 +1219,15 @@ fun VaultSettingsScreen(
         // v5.3 Meta (Facebook Page & Instagram) Reels Graph API Vault
         item {
             Card(
-                colors = CardDefaults.cardColors(containerColor = AmoledSurface),
-                border = BorderStroke(1.dp, AmoledBorder)
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
             ) {
                 Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("Meta Reels Publisher (FB Page + IG Business)", style = MaterialTheme.typography.titleMedium)
                     Text(
                         "Optional 1-tap direct Facebook Page Reels & Instagram Reels Graph API publishing.",
                         style = MaterialTheme.typography.labelMedium,
-                        color = TextSecondary
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     PlatformGuideTriggerButton(
                         label = "? Setup Guide & Commands",
@@ -1112,8 +1276,8 @@ fun VaultSettingsScreen(
         // v2.0 In-App GitHub Remote Worker Editor (GET / PUT kaggle_worker/video_worker.py)
         item {
             Card(
-                colors = CardDefaults.cardColors(containerColor = AmoledSurface),
-                border = BorderStroke(1.dp, AmoledBorder)
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
             ) {
                 Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Row(
@@ -1134,7 +1298,7 @@ fun VaultSettingsScreen(
                     Text(
                         "Edit kaggle_worker/video_worker.py directly on GitHub via Contents REST API and trigger sync-kaggle-worker.yml.",
                         style = MaterialTheme.typography.labelMedium,
-                        color = TextSecondary
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     if (remoteWorkerSource.isNotBlank()) {
                         OutlinedTextField(
@@ -1169,15 +1333,15 @@ fun VaultSettingsScreen(
         // GitHub OTA Updater
         item {
             Card(
-                colors = CardDefaults.cardColors(containerColor = AmoledSurface),
-                border = BorderStroke(1.dp, AmoledBorder)
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
             ) {
                 Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("In-App GitHub OTA Updater", style = MaterialTheme.typography.titleMedium)
                     Text(
                         otaState.message ?: "Installed version: v${BuildConfig.VERSION_NAME} (code ${BuildConfig.VERSION_CODE})",
                         style = MaterialTheme.typography.bodyMedium,
-                        color = TextSecondary
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     if (otaState.isDownloading) {
                         LinearProgressIndicator(
@@ -1217,8 +1381,8 @@ fun VaultSettingsScreen(
         // Hardware Security Controls & Encrypted Backup
         item {
             Card(
-                colors = CardDefaults.cardColors(containerColor = AmoledSurface),
-                border = BorderStroke(1.dp, AmoledBorder)
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
             ) {
                 Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text("Security & Privacy Shield", style = MaterialTheme.typography.titleMedium)
@@ -1259,7 +1423,7 @@ fun VaultSettingsScreen(
                         )
                     }
 
-                    Text("Auto-Lock Timeout", style = MaterialTheme.typography.labelMedium, color = TextSecondary)
+                    Text("Auto-Lock Timeout", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         AutoLockTimeout.entries.forEach { timeout ->
                             FilterChip(
@@ -1270,7 +1434,7 @@ fun VaultSettingsScreen(
                         }
                     }
 
-                    HorizontalDivider(color = AmoledBorder)
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outline)
                     Text("4-Layer Encrypted Backup & Cloud Sync", style = MaterialTheme.typography.titleMedium)
                     Button(
                         onClick = onOpenBackupCenter,
@@ -1299,7 +1463,7 @@ fun VaultSettingsScreen(
                         }
                     }
 
-                    HorizontalDivider(color = AmoledBorder)
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outline)
                     Button(
                         onClick = { panicStep = 1 },
                         colors = ButtonDefaults.buttonColors(containerColor = CrimsonDanger),
@@ -1325,18 +1489,40 @@ fun VaultSettingsScreen(
         )
     }
 
+    if (showCompatibleProvidersDialog) {
+        CompatibleAiProvidersDialog(
+            providers = draft.compatibleAiProviders,
+            onSave = { providers ->
+                draft = draft.copy(compatibleAiProviders = providers)
+                showCompatibleProvidersDialog = false
+            },
+            onDismiss = { showCompatibleProvidersDialog = false }
+        )
+    }
+
+    if (showPlatformCredentialsDialog) {
+        PlatformApiCredentialsDialog(
+            credentials = draft.platformApiCredentials,
+            onSave = { credentials ->
+                draft = draft.copy(platformApiCredentials = credentials)
+                showPlatformCredentialsDialog = false
+            },
+            onDismiss = { showPlatformCredentialsDialog = false }
+        )
+    }
+
     if (pendingBackupMode != null) {
         val isExport = pendingBackupMode == "EXPORT"
         AlertDialog(
             onDismissRequest = { pendingBackupMode = null },
-            containerColor = AmoledSurface,
+            containerColor = MaterialTheme.colorScheme.surface,
             title = { Text(if (isExport) "Encrypt .omniai Backup" else "Decrypt .omniai Backup") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(
                         "Enter a passphrase (min 6 chars) for PBKDF2-SHA256 + AES-256-GCM key derivation.",
                         style = MaterialTheme.typography.bodyMedium,
-                        color = TextSecondary
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     OutlinedTextField(
                         value = backupPassword,
@@ -1375,7 +1561,7 @@ fun VaultSettingsScreen(
     if (panicStep == 1) {
         AlertDialog(
             onDismissRequest = { panicStep = 0 },
-            containerColor = AmoledSurface,
+            containerColor = MaterialTheme.colorScheme.surface,
             title = { Text("Confirm Panic Wipe (1/2)") },
             text = {
                 Text("This permanently shreds EncryptedSharedPreferences, wipes all Room chat threads, presets, storyboards, and deletes all cached local renders.")
@@ -1395,7 +1581,7 @@ fun VaultSettingsScreen(
     if (panicStep == 2) {
         AlertDialog(
             onDismissRequest = { panicStep = 0 },
-            containerColor = AmoledSurface,
+            containerColor = MaterialTheme.colorScheme.surface,
             title = { Text("FINAL WARNING: Shred All Data (2/2)") },
             text = { Text("Action cannot be undone. Confirm immediate cryptographic shred?") },
             confirmButton = {
@@ -1427,6 +1613,38 @@ fun VaultSettingsScreen(
 }
 
 @Composable
+private fun ProviderSettingsHeader(
+    title: String,
+    description: String,
+    guideId: PlatformGuideId,
+    onOpenGuide: (PlatformGuideId) -> Unit
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                title,
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.weight(1f)
+            )
+            PlatformGuideTriggerButton(
+                label = "Setup guide",
+                onClick = { onOpenGuide(guideId) }
+            )
+        }
+        Text(
+            description,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}
+
+@Composable
 private fun SecretVaultField(
     label: String,
     value: String,
@@ -1450,4 +1668,258 @@ private fun SecretVaultField(
             Icon(Icons.Filled.ContentCopy, contentDescription = "Copy $label")
         }
     }
+}
+
+@Composable
+private fun CompatibleAiProvidersDialog(
+    providers: List<CompatibleAiProviderConfig>,
+    onSave: (List<CompatibleAiProviderConfig>) -> Unit,
+    onDismiss: () -> Unit
+) {
+    var draft by remember(providers) { mutableStateOf(providers) }
+
+    fun update(id: String, transform: (CompatibleAiProviderConfig) -> CompatibleAiProviderConfig) {
+        draft = draft.map { provider -> if (provider.id == id) transform(provider) else provider }
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Additional AI providers") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    "Providers use the OpenAI-compatible chat-completions API. Requests are tried in saved order after the Primary AI endpoint. OpenAI API billing is separate from a ChatGPT subscription. Tap Save API Settings to persist these changes.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    items(QUICK_PROVIDER_PRESETS) { preset ->
+                        val exists = draft.any {
+                            it.name == preset.label && it.baseUrl.equals(preset.baseUrl, ignoreCase = true)
+                        }
+                        FilterChip(
+                            selected = exists,
+                            onClick = {
+                                if (!exists) {
+                                    draft = draft + CompatibleAiProviderConfig(
+                                        id = UUID.randomUUID().toString(),
+                                        name = preset.label,
+                                        baseUrl = preset.baseUrl,
+                                        model = preset.modelId
+                                    )
+                                }
+                            },
+                            label = { Text(preset.label, maxLines = 1) }
+                        )
+                    }
+                }
+                OutlinedButton(
+                    onClick = {
+                        draft = draft + CompatibleAiProviderConfig(
+                            id = UUID.randomUUID().toString(),
+                            name = "Custom provider",
+                            baseUrl = "",
+                            model = ""
+                        )
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(Icons.Filled.Add, contentDescription = null)
+                    Spacer(Modifier.width(6.dp))
+                    Text("Add custom endpoint")
+                }
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(360.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    items(draft, key = { it.id }) { provider ->
+                        Card(
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(10.dp),
+                                verticalArrangement = Arrangement.spacedBy(7.dp)
+                            ) {
+                                OutlinedTextField(
+                                    value = provider.name,
+                                    onValueChange = { value -> update(provider.id) { it.copy(name = value) } },
+                                    label = { Text("Provider name") },
+                                    singleLine = true,
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                                OutlinedTextField(
+                                    value = provider.baseUrl,
+                                    onValueChange = { value -> update(provider.id) { it.copy(baseUrl = value) } },
+                                    label = { Text("Base URL") },
+                                    placeholder = { Text("https://api.example.com/v1") },
+                                    singleLine = true,
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                                OutlinedTextField(
+                                    value = provider.model,
+                                    onValueChange = { value -> update(provider.id) { it.copy(model = value) } },
+                                    label = { Text("Model ID") },
+                                    singleLine = true,
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                                OutlinedTextField(
+                                    value = provider.apiKey,
+                                    onValueChange = { value -> update(provider.id) { it.copy(apiKey = value) } },
+                                    label = { Text("API key (optional for local endpoints)") },
+                                    visualTransformation = PasswordVisualTransformation(),
+                                    singleLine = true,
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Switch(
+                                        checked = provider.enabled,
+                                        onCheckedChange = { enabled ->
+                                            update(provider.id) { it.copy(enabled = enabled) }
+                                        }
+                                    )
+                                    Text("Enabled", modifier = Modifier.weight(1f))
+                                    IconButton(onClick = { draft = draft.filterNot { it.id == provider.id } }) {
+                                        Icon(Icons.Filled.Delete, contentDescription = "Remove ${provider.name}")
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(onClick = { onSave(draft) }) { Text("Done") }
+        },
+        dismissButton = {
+            OutlinedButton(onClick = onDismiss) { Text("Cancel") }
+        }
+    )
+}
+
+@Composable
+private fun PlatformApiCredentialsDialog(
+    credentials: List<PlatformApiCredential>,
+    onSave: (List<PlatformApiCredential>) -> Unit,
+    onDismiss: () -> Unit
+) {
+    var draft by remember(credentials) { mutableStateOf(credentials) }
+    val platformPresets = listOf("Amazon AWS / Bedrock", "Oracle OCI", "Azure", "Custom")
+
+    fun update(id: String, transform: (PlatformApiCredential) -> PlatformApiCredential) {
+        draft = draft.map { credential -> if (credential.id == id) transform(credential) else credential }
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Saved platform credentials") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    "These entries are encrypted on this device. Saving credentials does not enable a vendor workflow unless the app has a dedicated integration for that service. Tap Save API Settings to persist changes.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    items(platformPresets) { platform ->
+                        FilterChip(
+                            selected = false,
+                            onClick = {
+                                draft = draft + PlatformApiCredential(
+                                    id = UUID.randomUUID().toString(),
+                                    platformName = platform
+                                )
+                            },
+                            label = { Text(platform) }
+                        )
+                    }
+                }
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(360.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    items(draft, key = { it.id }) { credential ->
+                        Card(
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(10.dp),
+                                verticalArrangement = Arrangement.spacedBy(7.dp)
+                            ) {
+                                OutlinedTextField(
+                                    value = credential.platformName,
+                                    onValueChange = { value -> update(credential.id) { it.copy(platformName = value) } },
+                                    label = { Text("Platform / service") },
+                                    singleLine = true,
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                                OutlinedTextField(
+                                    value = credential.accountLabel,
+                                    onValueChange = { value -> update(credential.id) { it.copy(accountLabel = value) } },
+                                    label = { Text("Account or project label") },
+                                    singleLine = true,
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                                OutlinedTextField(
+                                    value = credential.endpointUrl,
+                                    onValueChange = { value -> update(credential.id) { it.copy(endpointUrl = value) } },
+                                    label = { Text("Endpoint URL (optional)") },
+                                    singleLine = true,
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                                OutlinedTextField(
+                                    value = credential.apiKey,
+                                    onValueChange = { value -> update(credential.id) { it.copy(apiKey = value) } },
+                                    label = { Text("API key / token") },
+                                    visualTransformation = PasswordVisualTransformation(),
+                                    singleLine = true,
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                                OutlinedTextField(
+                                    value = credential.apiSecret,
+                                    onValueChange = { value -> update(credential.id) { it.copy(apiSecret = value) } },
+                                    label = { Text("API secret") },
+                                    visualTransformation = PasswordVisualTransformation(),
+                                    singleLine = true,
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                                OutlinedTextField(
+                                    value = credential.extraCredentials,
+                                    onValueChange = { value ->
+                                        update(credential.id) { it.copy(extraCredentials = value) }
+                                    },
+                                    label = { Text("Extra fields (region, tenant, fingerprint, etc.)") },
+                                    visualTransformation = PasswordVisualTransformation(),
+                                    minLines = 2,
+                                    maxLines = 4,
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                                OutlinedButton(
+                                    onClick = { draft = draft.filterNot { it.id == credential.id } },
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Icon(Icons.Filled.Delete, contentDescription = null)
+                                    Spacer(Modifier.width(6.dp))
+                                    Text("Remove credential")
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(onClick = { onSave(draft) }) { Text("Done") }
+        },
+        dismissButton = {
+            OutlinedButton(onClick = onDismiss) { Text("Cancel") }
+        }
+    )
 }

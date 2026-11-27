@@ -4,7 +4,10 @@ import android.content.Context
 import android.content.SharedPreferences
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
+import com.omniai.studio.cloud.UserApiCredentials
+import com.omniai.studio.data.remote.CompatibleAiProviderConfig
 import com.omniai.studio.data.remote.KaggleAccountCredential
+import com.omniai.studio.data.remote.PlatformApiCredential
 import com.omniai.studio.data.remote.VaultSnapshot
 import com.omniai.studio.data.remote.YouTubeChannelProfile
 import kotlinx.serialization.encodeToString
@@ -61,6 +64,26 @@ class VaultManager(context: Context) {
     var geminiApiKey: String
         get() = prefs.getString(KEY_GEMINI_KEY, "") ?: ""
         set(value) = prefs.edit().putString(KEY_GEMINI_KEY, value.trim()).apply()
+
+    var compatibleAiProviders: List<CompatibleAiProviderConfig>
+        get() = poolJson.decodeFromString(
+            prefs.getString(KEY_COMPATIBLE_AI_PROVIDERS, "[]") ?: "[]"
+        )
+        set(value) = prefs.edit()
+            .putString(KEY_COMPATIBLE_AI_PROVIDERS, poolJson.encodeToString(value))
+            .apply()
+
+    var platformApiCredentials: List<PlatformApiCredential>
+        get() = poolJson.decodeFromString(
+            prefs.getString(KEY_PLATFORM_API_CREDENTIALS, "[]") ?: "[]"
+        )
+        set(value) = prefs.edit()
+            .putString(KEY_PLATFORM_API_CREDENTIALS, poolJson.encodeToString(value))
+            .apply()
+
+    var braveSearchApiKey: String
+        get() = prefs.getString(KEY_BRAVE_SEARCH_API_KEY, "") ?: ""
+        set(value) = prefs.edit().putString(KEY_BRAVE_SEARCH_API_KEY, value.trim()).apply()
 
     var autoFallbackEnabled: Boolean
         get() = prefs.getBoolean(KEY_AUTO_FALLBACK, true)
@@ -422,10 +445,15 @@ class VaultManager(context: Context) {
         huggingFaceModel = huggingFaceModel,
         geminiApiKey = geminiApiKey,
         autoFallbackEnabled = autoFallbackEnabled,
+        compatibleAiProviders = compatibleAiProviders,
+        platformApiCredentials = platformApiCredentials,
+        braveSearchApiKey = braveSearchApiKey,
         kaggleUsername = kaggleUsername,
         kaggleApiKey = kaggleApiKey,
         kaggleDatasetSlug = kaggleDatasetSlug,
         kaggleKernelSlug = kaggleKernelSlug,
+        kaggleAccountPool = getKaggleAccountPool(),
+        activeKaggleAccountId = activeKaggleAccountId,
         githubRepo = githubRepo,
         githubToken = githubToken,
         telegramBotToken = telegramBotToken,
@@ -450,6 +478,75 @@ class VaultManager(context: Context) {
         autoLockTimeout = autoLockTimeout.name
     )
 
+    fun exportUserApiCredentials(): UserApiCredentials = UserApiCredentials(
+        primaryTunnelUrl = primaryTunnelUrl,
+        primaryTunnelApiKey = primaryTunnelApiKey,
+        primaryModelName = primaryModelName,
+        huggingFaceToken = huggingFaceToken,
+        huggingFaceModel = huggingFaceModel,
+        geminiApiKey = geminiApiKey,
+        autoFallbackEnabled = autoFallbackEnabled,
+        compatibleAiProviders = compatibleAiProviders,
+        platformApiCredentials = platformApiCredentials,
+        braveSearchApiKey = braveSearchApiKey,
+        kaggleUsername = kaggleUsername,
+        kaggleApiKey = kaggleApiKey,
+        kaggleDatasetSlug = kaggleDatasetSlug,
+        kaggleKernelSlug = kaggleKernelSlug,
+        githubRepo = githubRepo,
+        githubToken = githubToken,
+        telegramBotToken = telegramBotToken,
+        telegramChatId = telegramChatId,
+        telegramApiId = telegramApiId,
+        telegramApiHash = telegramApiHash,
+        customWebhookUrl = customWebhookUrl,
+        ytClientId = ytClientId,
+        ytClientSecret = ytClientSecret,
+        ytRefreshToken = ytRefreshToken,
+        ytChannelLabel = ytChannelLabel,
+        ytProfilesJson = prefs.getString(KEY_YT_PROFILES_JSON, "[]") ?: "[]",
+        activeYtProfileId = activeYouTubeProfileId,
+        metaPageId = metaPageId,
+        metaIgUserId = metaIgUserId,
+        metaPageAccessToken = metaPageAccessToken
+    )
+
+    fun importUserApiCredentials(credentials: UserApiCredentials): Boolean =
+        prefs.edit()
+            .putString(KEY_PRIMARY_URL, credentials.primaryTunnelUrl.trim().trimEnd('/'))
+            .putString(KEY_PRIMARY_API_KEY, credentials.primaryTunnelApiKey.trim())
+            .putString(KEY_PRIMARY_MODEL, credentials.primaryModelName.trim())
+            .putString(KEY_HF_TOKEN, credentials.huggingFaceToken.trim())
+            .putString(KEY_HF_MODEL, credentials.huggingFaceModel.trim())
+            .putString(KEY_GEMINI_KEY, credentials.geminiApiKey.trim())
+            .putBoolean(KEY_AUTO_FALLBACK, credentials.autoFallbackEnabled)
+            .putString(KEY_COMPATIBLE_AI_PROVIDERS, poolJson.encodeToString(credentials.compatibleAiProviders))
+            .putString(KEY_PLATFORM_API_CREDENTIALS, poolJson.encodeToString(credentials.platformApiCredentials))
+            .putString(KEY_BRAVE_SEARCH_API_KEY, credentials.braveSearchApiKey.trim())
+            .putString(KEY_KAGGLE_USER, credentials.kaggleUsername.trim())
+            .putString(KEY_KAGGLE_KEY, credentials.kaggleApiKey.trim())
+            .putString(KEY_KAGGLE_DATASET, credentials.kaggleDatasetSlug.trim())
+            .putString(KEY_KAGGLE_KERNEL, credentials.kaggleKernelSlug.trim())
+            .putString(KEY_KAGGLE_POOL_JSON, poolJson.encodeToString(credentials.kaggleAccountPool))
+            .putString(KEY_ACTIVE_KAGGLE_ID, credentials.activeKaggleAccountId.trim())
+            .putString(KEY_GITHUB_REPO, credentials.githubRepo.trim())
+            .putString(KEY_GITHUB_TOKEN, credentials.githubToken.trim())
+            .putString(KEY_TG_BOT_TOKEN, credentials.telegramBotToken.trim())
+            .putString(KEY_TG_CHAT_ID, credentials.telegramChatId.trim())
+            .putString(KEY_TG_API_ID, credentials.telegramApiId.trim())
+            .putString(KEY_TG_API_HASH, credentials.telegramApiHash.trim())
+            .putString(KEY_CUSTOM_WEBHOOK_URL, credentials.customWebhookUrl.trim())
+            .putString(KEY_YT_CLIENT_ID, credentials.ytClientId.trim())
+            .putString(KEY_YT_CLIENT_SECRET, credentials.ytClientSecret.trim())
+            .putString(KEY_YT_REFRESH_TOKEN, credentials.ytRefreshToken.trim())
+            .putString(KEY_YT_CHANNEL_LABEL, credentials.ytChannelLabel.trim().ifBlank { "Primary Channel" })
+            .putString(KEY_YT_PROFILES_JSON, credentials.ytProfilesJson.ifBlank { "[]" })
+            .putString(KEY_ACTIVE_YT_PROFILE_ID, credentials.activeYtProfileId.trim())
+            .putString(KEY_META_PAGE_ID, credentials.metaPageId.trim())
+            .putString(KEY_META_IG_USER_ID, credentials.metaIgUserId.trim())
+            .putString(KEY_META_PAGE_TOKEN, credentials.metaPageAccessToken.trim())
+            .commit()
+
     fun importSnapshot(snapshot: VaultSnapshot) {
         prefs.edit()
             .putString(KEY_PRIMARY_URL, snapshot.primaryTunnelUrl)
@@ -459,6 +556,9 @@ class VaultManager(context: Context) {
             .putString(KEY_HF_MODEL, snapshot.huggingFaceModel)
             .putString(KEY_GEMINI_KEY, snapshot.geminiApiKey)
             .putBoolean(KEY_AUTO_FALLBACK, snapshot.autoFallbackEnabled)
+            .putString(KEY_COMPATIBLE_AI_PROVIDERS, poolJson.encodeToString(snapshot.compatibleAiProviders))
+            .putString(KEY_PLATFORM_API_CREDENTIALS, poolJson.encodeToString(snapshot.platformApiCredentials))
+            .putString(KEY_BRAVE_SEARCH_API_KEY, snapshot.braveSearchApiKey.trim())
             .putString(KEY_KAGGLE_USER, snapshot.kaggleUsername)
             .putString(KEY_KAGGLE_KEY, snapshot.kaggleApiKey)
             .putString(KEY_KAGGLE_DATASET, snapshot.kaggleDatasetSlug)
@@ -507,6 +607,9 @@ class VaultManager(context: Context) {
         private const val KEY_HF_TOKEN = "hf_token"
         private const val KEY_HF_MODEL = "hf_model"
         private const val KEY_GEMINI_KEY = "gemini_api_key"
+        private const val KEY_COMPATIBLE_AI_PROVIDERS = "compatible_ai_providers"
+        private const val KEY_PLATFORM_API_CREDENTIALS = "platform_api_credentials"
+        private const val KEY_BRAVE_SEARCH_API_KEY = "brave_search_api_key"
         private const val KEY_AUTO_FALLBACK = "auto_fallback_enabled"
         private const val KEY_KAGGLE_USER = "kaggle_username"
         private const val KEY_KAGGLE_KEY = "kaggle_api_key"

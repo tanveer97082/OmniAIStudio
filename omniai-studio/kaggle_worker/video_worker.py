@@ -47,6 +47,7 @@ VOICE_MAP = {
     "English Male": "en-US-AndrewNeural",
     "English Female": "en-US-AvaNeural",
 }
+SUPPORTED_DIALOGUE_VOICES = set(VOICE_MAP) | set(VOICE_MAP.values())
 
 T = TypeVar("T")
 
@@ -327,6 +328,103 @@ async def synthesize_voice_and_srt(
 
     srt_out.write_text("\n".join(srt_lines), encoding="utf-8")
     return total_duration
+
+
+def normalize_dialogue_lines(dialogue: Any, default_voice: str) -> List[Dict[str, str]]:
+    if not isinstance(dialogue, list):
+        return []
+    normalized: List[Dict[str, str]] = []
+    for line in dialogue:
+        if not isinstance(line, dict):
+            continue
+        text = str(line.get("text") or "").strip()
+        if not text:
+            continue
+        voice = str(line.get("voice") or default_voice).strip()
+        if voice not in SUPPORTED_DIALOGUE_VOICES:
+            voice = default_voice
+        normalized.append(
+            {
+                "character_name": " ".join(
+                    str(line.get("character_name") or "Character").split()
+                )[:80] or "Character",
+                "voice": voice,
+                "text": text,
+            }
+        )
+    return normalized
+
+
+def parse_srt_timestamp(timestamp: str) -> float:
+    hours, minutes, seconds = timestamp.replace(",", ".").split(":")
+    return int(hours) * 3600 + int(minutes) * 60 + float(seconds)
+
+
+async def synthesize_dialogue_and_srt(
+    dialogue: List[Dict[str, str]],
+    audio_out: Path,
+    srt_out: Path,
+    speed_factor: float = 1.0,
+) -> float:
+    """Render each speaker separately, then concatenate audio and offset captions."""
+    audio_parts: List[Path] = []
+    subtitle_blocks: List[str] = []
+    time_offset = 0.0
+    subtitle_index = 1
+
+    for line_index, line in enumerate(dialogue, start=1):
+        part_audio = audio_out.with_name(f"{audio_out.stem}_speaker_{line_index}.mp3")
+        part_srt = srt_out.with_name(f"{srt_out.stem}_speaker_{line_index}.srt")
+        duration = await synthesize_voice_and_srt(
+            text=line["text"],
+            voice_name=line["voice"],
+            audio_out=part_audio,
+            srt_out=part_srt,
+            speed_factor=speed_factor,
+        )
+        audio_parts.append(part_audio)
+
+        blocks = part_srt.read_text(encoding="utf-8").strip().split("\n\n")
+        for block in blocks:
+            rows = block.splitlines()
+            if len(rows) < 3 or " --> " not in rows[1]:
+                continue
+            start_text, end_text = rows[1].split(" --> ", 1)
+            start = format_srt_timestamp(parse_srt_timestamp(start_text) + time_offset)
+            end = format_srt_timestamp(parse_srt_timestamp(end_text) + time_offset)
+            caption = " ".join(rows[2:]).strip()
+            subtitle_blocks.append(
+                f"{subtitle_index}\n{start} --> {end}\n{line['character_name']}: {caption}\n"
+            )
+            subtitle_index += 1
+        time_offset += duration
+
+    concat_list = audio_out.with_name(f"{audio_out.stem}_concat.txt")
+    concat_list.write_text(
+        "".join(f"file '{part.as_posix()}'\n" for part in audio_parts),
+        encoding="utf-8",
+    )
+    subprocess.run(
+        [
+            "ffmpeg",
+            "-y",
+            "-f",
+            "concat",
+            "-safe",
+            "0",
+            "-i",
+            str(concat_list),
+            "-c:a",
+            "libmp3lame",
+            "-q:a",
+            "4",
+            str(audio_out),
+        ],
+        capture_output=True,
+        check=True,
+    )
+    srt_out.write_text("\n".join(subtitle_blocks), encoding="utf-8")
+    return probe_duration(audio_out)
 
 
 def resolve_dimensions(aspect_ratio: str) -> Tuple[int, int]:
@@ -1253,20 +1351,34 @@ def run_orchestrator() -> None:
     # Step 1: Generate Edge-TTS voiceovers & synchronized SRT files for every scene
     prepared_scenes: List[Dict[str, Any]] = []
     for idx, scene in enumerate(scenes, start=1):
-        narration = scene.get("narration", "")
+        narration = str(scene.get("narration", "") or "")
+        dialogue = normalize_dialogue_lines(scene.get("dialogue"), voice)
+        speech_text = " ".join(
+            f"{line['character_name']}: {line['text']}" for line in dialogue
+        ) if dialogue else narration
         visual_prompt = scene.get("visual_prompt", scene.get("prompt", ""))
         audio_path = TEMP_DIR / f"scene_{idx}.mp3"
         srt_path = TEMP_DIR / f"scene_{idx}.srt"
         raw_video_path = TEMP_DIR / f"scene_{idx}_raw.mp4"
 
-        duration = run_async(
-            synthesize_voice_and_srt(narration, voice, audio_path, srt_path, speed_factor=speed_factor)
-        )
+        if dialogue:
+            duration = run_async(
+                synthesize_dialogue_and_srt(
+                    dialogue,
+                    audio_path,
+                    srt_path,
+                    speed_factor=speed_factor,
+                )
+            )
+        else:
+            duration = run_async(
+                synthesize_voice_and_srt(narration, voice, audio_path, srt_path, speed_factor=speed_factor)
+            )
         prepared_scenes.append(
             {
                 "scene_index": idx,
                 "visual_prompt": visual_prompt,
-                "narration": narration,
+                "narration": speech_text,
                 "duration_sec": duration,
                 "audio_path": str(audio_path),
                 "srt_path": str(srt_path),

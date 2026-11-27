@@ -67,9 +67,12 @@ import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.fragment.app.FragmentActivity
+import com.omniai.studio.security.BiometricAuthManager
 import com.omniai.studio.terminal.TerminalLine
 import com.omniai.studio.terminal.TerminalLineType
 import com.omniai.studio.ui.theme.AmberWarning
@@ -81,15 +84,65 @@ import com.omniai.studio.viewmodel.OmniAiViewModel
 
 private val ANSI_PATTERN = Regex("\u001B\\[([0-9;]*)m")
 
+private data class TerminalCommandSuggestion(
+    val platformAliases: List<String>,
+    val command: String
+)
+
+private val TERMINAL_COMMAND_SUGGESTIONS = listOf(
+    TerminalCommandSuggestion(listOf("general"), "help"),
+    TerminalCommandSuggestion(listOf("ai"), "ai "),
+    TerminalCommandSuggestion(listOf("supabase"), "supabase schema"),
+    TerminalCommandSuggestion(listOf("supabase"), "supabase keys push"),
+    TerminalCommandSuggestion(listOf("supabase"), "supabase keys pull"),
+    TerminalCommandSuggestion(listOf("supabase"), "supabase status"),
+    TerminalCommandSuggestion(listOf("cloud"), "cloud status"),
+    TerminalCommandSuggestion(listOf("cloud"), "cloud sync"),
+    TerminalCommandSuggestion(listOf("cloud"), "cloud users"),
+    TerminalCommandSuggestion(listOf("github", "git"), "git status"),
+    TerminalCommandSuggestion(listOf("github", "git"), "git push "),
+    TerminalCommandSuggestion(listOf("github", "git"), "git pull"),
+    TerminalCommandSuggestion(listOf("github", "git"), "git actions"),
+    TerminalCommandSuggestion(listOf("kaggle"), "kaggle status"),
+    TerminalCommandSuggestion(listOf("huggingface", "hugging face", "hf"), "hf search "),
+    TerminalCommandSuggestion(listOf("youtube", "yt"), "yt stats"),
+    TerminalCommandSuggestion(listOf("youtube", "yt"), "yt upload "),
+    TerminalCommandSuggestion(listOf("youtube", "yt"), "yt comments "),
+    TerminalCommandSuggestion(listOf("youtube", "yt"), "yt compliance "),
+    TerminalCommandSuggestion(listOf("database", "db"), "db stats"),
+    TerminalCommandSuggestion(listOf("database", "db"), "db search "),
+    TerminalCommandSuggestion(listOf("database", "db"), "db export csv"),
+    TerminalCommandSuggestion(listOf("backup"), "backup now"),
+    TerminalCommandSuggestion(listOf("system"), "sysinfo"),
+    TerminalCommandSuggestion(listOf("network"), "netlog")
+)
+
+private fun terminalCommandSuggestions(input: String): List<TerminalCommandSuggestion> {
+    val query = input.trim().lowercase()
+    if (query.isBlank()) return emptyList()
+    return TERMINAL_COMMAND_SUGGESTIONS.filter { suggestion ->
+        suggestion.command.trimEnd().startsWith(query) ||
+            suggestion.platformAliases.any { alias ->
+                query == alias ||
+                    query == "$alias " ||
+                    (query.startsWith("$alias ") &&
+                        suggestion.command.substringAfter(' ', "").startsWith(query.removePrefix("$alias ").trim()))
+            }
+    }.distinctBy { it.command }
+}
+
 @Composable
 fun TerminalScreen(
-    viewModel: OmniAiViewModel
+    viewModel: OmniAiViewModel,
+    activity: FragmentActivity,
+    biometricManager: BiometricAuthManager
 ) {
     val uiConfig = LocalUiConfig.current
     val clipboard = LocalClipboardManager.current
     val haptics = LocalHapticFeedback.current
 
     val lines by viewModel.terminalLines.collectAsState()
+    val vaultSnapshot by viewModel.vaultSnapshot.collectAsState()
     val cwdLabel by viewModel.terminalCwdLabel.collectAsState()
     val isRunning by viewModel.isTerminalRunning.collectAsState()
     val useTermuxBridge by viewModel.useTermuxBridge.collectAsState()
@@ -105,6 +158,7 @@ fun TerminalScreen(
     val listState = rememberLazyListState()
     val fontSizeSp = uiConfig.terminalFontSizeSp.coerceIn(10, 18).sp
     val lineHeightSp = (uiConfig.terminalFontSizeSp.coerceIn(10, 18) + 5).sp
+    val commandSuggestions = remember(commandInput) { terminalCommandSuggestions(commandInput) }
 
     LaunchedEffect(Unit) {
         viewModel.refreshTermuxStatus()
@@ -122,13 +176,41 @@ fun TerminalScreen(
         }
     }
 
+    fun executeCommand(command: String, forceTermux: Boolean? = null) {
+        val trimmed = command.trim()
+        val requiresVaultVerification = vaultSnapshot.vaultLockEnabled &&
+            (trimmed.equals("supabase keys push", ignoreCase = true) ||
+                trimmed.equals("supabase keys pull", ignoreCase = true))
+        if (requiresVaultVerification) {
+            biometricManager.authenticate(
+                activity = activity,
+                title = "Vault Verification",
+                subtitle = "Authenticate before syncing API credentials",
+                onSuccess = { viewModel.executeTerminalCommand(command, forceTermux) },
+                onFailure = viewModel::postToast
+            )
+        } else {
+            viewModel.executeTerminalCommand(command, forceTermux)
+        }
+    }
+
     fun submitCommand() {
         val trimmed = commandInput.trim()
         if (trimmed.isBlank()) return
         triggerHaptic()
-        viewModel.executeTerminalCommand(trimmed)
+        executeCommand(trimmed)
         commandInput = ""
         historyCursor = -1
+    }
+
+    fun copyTerminalTranscript() {
+        val transcript = viewModel.getTerminalTranscriptText()
+        if (transcript.isBlank()) {
+            viewModel.postToast("There is no terminal output to copy.")
+            return
+        }
+        clipboard.setText(AnnotatedString(transcript))
+        viewModel.postToast("Copied terminal transcript to clipboard.")
     }
 
     val colorScheme = MaterialTheme.colorScheme
@@ -159,7 +241,8 @@ fun TerminalScreen(
                 ) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        modifier = Modifier.weight(1f)
                     ) {
                         Icon(
                             Icons.Filled.Terminal,
@@ -169,7 +252,9 @@ fun TerminalScreen(
                         Column {
                             Text(
                                 "Hybrid Terminal & OmniCLI",
-                                style = MaterialTheme.typography.titleMedium
+                                style = MaterialTheme.typography.titleMedium,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
                             Text(
                                 text = if (useTermuxBridge) {
@@ -184,6 +269,19 @@ fun TerminalScreen(
                     }
 
                     Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        IconButton(
+                            onClick = {
+                                triggerHaptic()
+                                copyTerminalTranscript()
+                            },
+                            enabled = lines.isNotEmpty()
+                        ) {
+                            Icon(
+                                Icons.Filled.ContentCopy,
+                                contentDescription = "Copy terminal output",
+                                tint = colorScheme.primary
+                            )
+                        }
                         IconButton(onClick = {
                             triggerHaptic()
                             viewModel.toggleNetlogStreaming()
@@ -284,8 +382,8 @@ fun TerminalScreen(
             }
         }
 
-        // Sticky Extra-Keys Helper Row (ESC, TAB, ↑, ↓, /, -, |, ~, CLEAR, COPY ALL)
-        val extraKeys = listOf("ESC", "TAB", "↑", "↓", "/", "-", "|", "~", "CLEAR", "COPY ALL")
+        // Sticky Extra-Keys Helper Row (ESC, TAB, ↑, ↓, /, -, |, ~, CLEAR)
+        val extraKeys = listOf("ESC", "TAB", "↑", "↓", "/", "-", "|", "~", "CLEAR")
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -304,10 +402,7 @@ fun TerminalScreen(
                                 if (isRunning) viewModel.stopTerminalProcess() else commandInput = ""
                             }
                             "TAB" -> {
-                                val candidates = listOf(
-                                    "help", "ai ", "kaggle status", "hf search ",
-                                    "curl ", "backup now", "sysinfo", "netlog", "clear"
-                                )
+                                val candidates = TERMINAL_COMMAND_SUGGESTIONS.map { it.command } + listOf("clear", "curl ")
                                 val match = candidates.firstOrNull {
                                     it.startsWith(commandInput.trim(), ignoreCase = true)
                                 }
@@ -330,10 +425,6 @@ fun TerminalScreen(
                                 }
                             }
                             "CLEAR" -> viewModel.clearTerminalOutput()
-                            "COPY ALL" -> {
-                                clipboard.setText(AnnotatedString(viewModel.getTerminalTranscriptText()))
-                                viewModel.postToast("Copied terminal transcript to clipboard.")
-                            }
                             else -> {
                                 commandInput += keyLabel
                             }
@@ -348,6 +439,39 @@ fun TerminalScreen(
                         color = if (keyLabel == "CLEAR") AmberWarning else colorScheme.onSurface,
                         modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
                     )
+                }
+            }
+        }
+
+        if (commandSuggestions.isNotEmpty()) {
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    "Suggestions · tap to fill, then review before running",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = colorScheme.onSurfaceVariant
+                )
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    commandSuggestions.forEach { suggestion ->
+                        FilterChip(
+                            selected = false,
+                            onClick = {
+                                triggerHaptic()
+                                commandInput = suggestion.command
+                            },
+                            label = {
+                                Text(
+                                    suggestion.command.trim(),
+                                    fontFamily = FontFamily.Monospace,
+                                    maxLines = 1
+                                )
+                            }
+                        )
+                    }
                 }
             }
         }
@@ -463,8 +587,8 @@ fun TerminalScreen(
                                         }
                                         Button(onClick = {
                                             showSnippetsDialog = false
-                                            viewModel.executeTerminalCommand(
-                                                rawCommand = snippet.command,
+                                            executeCommand(
+                                                command = snippet.command,
                                                 forceTermux = snippet.useTermuxBridge
                                             )
                                         }) {

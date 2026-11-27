@@ -48,7 +48,6 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarOutline
 import androidx.compose.material.icons.filled.SystemUpdate
-import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -99,13 +98,8 @@ import com.omniai.studio.security.AutoLockTimeout
 import com.omniai.studio.ui.guides.PlatformGuideBottomSheet
 import com.omniai.studio.ui.guides.PlatformGuideId
 import com.omniai.studio.ui.guides.PlatformGuideTriggerButton
-import com.omniai.studio.ui.theme.AmoledBlack
-import com.omniai.studio.ui.theme.AmoledBorder
-import com.omniai.studio.ui.theme.AmoledSurface
-import com.omniai.studio.ui.theme.AmoledSurfaceVariant
 import com.omniai.studio.ui.theme.CrimsonDanger
 import com.omniai.studio.ui.theme.EmeraldAccent
-import com.omniai.studio.ui.theme.TextSecondary
 import com.omniai.studio.ui.theme.ThemeAccent
 import com.omniai.studio.viewmodel.OmniAiViewModel
 import kotlin.math.roundToInt
@@ -120,7 +114,6 @@ fun SettingsHubScreen(
     onOpenCloudAccount: () -> Unit = {},
     onOpenAnalytics: () -> Unit = {},
     onOpenThemeStudio: () -> Unit = {},
-    onOpenTerminal: () -> Unit = {},
     onRunGuideCommandInTerminal: (String) -> Unit = {}
 ) {
     val clipboard = LocalClipboardManager.current
@@ -218,9 +211,9 @@ fun SettingsHubScreen(
                 Column(modifier = Modifier.weight(1f)) {
                     Text("Settings Hub", style = MaterialTheme.typography.headlineSmall)
                     Text(
-                        "Search · Pinned Controls · Theme Studio · AI · Security",
+                        "Appearance · AI · Automation · Security",
                         style = MaterialTheme.typography.labelMedium,
-                        color = TextSecondary
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             }
@@ -368,7 +361,7 @@ fun SettingsHubScreen(
                                 Text(
                                     "Active Role: ${cloudRole.badgeText} · ${cloudSyncStatus.lastMessage}",
                                     style = MaterialTheme.typography.labelMedium,
-                                    color = TextSecondary
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
                             PlatformGuideTriggerButton(
@@ -388,8 +381,8 @@ fun SettingsHubScreen(
             }
         }
 
-        // v3.0 Quick Hubs: UI Theme Studio, Backup & Sync, Analytics & Hybrid Terminal
-        if (matchesSearch("theme", "studio", "layout", "backup", "sync", "analytics", "terminal", "netlog", "wallpaper", "nav")) {
+        // Quick access to the settings used most often.
+        if (matchesSearch("theme", "studio", "layout", "backup", "sync", "analytics", "netlog", "wallpaper", "nav")) {
             item {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(
@@ -420,14 +413,6 @@ fun SettingsHubScreen(
                             Spacer(modifier = Modifier.width(6.dp))
                             Text("Analytics")
                         }
-                        OutlinedButton(
-                            onClick = onOpenTerminal,
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Icon(Icons.Filled.Terminal, contentDescription = null)
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text("Terminal")
-                        }
                     }
                 }
             }
@@ -439,15 +424,15 @@ fun SettingsHubScreen(
         if (matchesSearch("appearance", "icon", "disguise", "calculator", "notes", "accent", "color", "font", "size", "theme")) {
             item {
                 Card(
-                    colors = CardDefaults.cardColors(containerColor = AmoledSurface),
-                    border = BorderStroke(1.dp, AmoledBorder)
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
                 ) {
                 Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text("1. Appearance & App Icon Disguise", style = MaterialTheme.typography.titleMedium, color = primaryColor)
                     Text(
                         "Switch the Android launcher icon and home screen label dynamically without reinstalling.",
                         style = MaterialTheme.typography.bodyMedium,
-                        color = TextSecondary
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
 
                     // 2x2 Visual App Icon Picker Grid
@@ -468,11 +453,11 @@ fun SettingsHubScreen(
                                     }
                                     Card(
                                         colors = CardDefaults.cardColors(
-                                            containerColor = if (isSelected) AmoledSurfaceVariant else AmoledBlack
+                                            containerColor = if (isSelected) MaterialTheme.colorScheme.surfaceVariant else MaterialTheme.colorScheme.background
                                         ),
                                         border = BorderStroke(
                                             width = if (isSelected) 2.dp else 1.dp,
-                                            color = if (isSelected) primaryColor else AmoledBorder
+                                            color = if (isSelected) primaryColor else MaterialTheme.colorScheme.outline
                                         ),
                                         modifier = Modifier
                                             .weight(1f)
@@ -516,7 +501,7 @@ fun SettingsHubScreen(
                                             Text(
                                                 "Label: \"${variant.launcherLabel}\"",
                                                 style = MaterialTheme.typography.labelMedium,
-                                                color = if (variant.isStealth) Color(0xFFF59E0B) else TextSecondary
+                                                color = if (variant.isStealth) Color(0xFFF59E0B) else MaterialTheme.colorScheme.onSurfaceVariant
                                             )
                                         }
                                     }
@@ -525,7 +510,7 @@ fun SettingsHubScreen(
                         }
                     }
 
-                    HorizontalDivider(color = AmoledBorder)
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outline)
 
                     // Theme Accent Color Picker
                     Text("Theme Accent Color", style = MaterialTheme.typography.titleMedium)
@@ -536,10 +521,10 @@ fun SettingsHubScreen(
                         ThemeAccent.entries.forEach { accent ->
                             val selected = settings.themeAccent == accent
                             Surface(
-                                color = if (selected) accent.primaryContainer else AmoledSurfaceVariant,
+                                color = if (selected) accent.primaryContainer else MaterialTheme.colorScheme.surfaceVariant,
                                 border = BorderStroke(
                                     width = if (selected) 2.dp else 1.dp,
-                                    color = if (selected) accent.primary else AmoledBorder
+                                    color = if (selected) accent.primary else MaterialTheme.colorScheme.outline
                                 ),
                                 shape = RoundedCornerShape(10.dp),
                                 modifier = Modifier
@@ -567,7 +552,7 @@ fun SettingsHubScreen(
                         }
                     }
 
-                    HorizontalDivider(color = AmoledBorder)
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outline)
 
                     // Chat Font Size Slider (12sp..20sp)
                     Row(
@@ -598,8 +583,8 @@ fun SettingsHubScreen(
         if (matchesSearch("ai", "engine", "temperature", "token", "context", "window", "tts", "voice", "hindi", "read")) {
         item {
             Card(
-                colors = CardDefaults.cardColors(containerColor = AmoledSurface),
-                border = BorderStroke(1.dp, AmoledBorder)
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
             ) {
                 Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text("2. AI Engine & Generation Controls", style = MaterialTheme.typography.titleMedium, color = primaryColor)
@@ -635,7 +620,7 @@ fun SettingsHubScreen(
                         steps = 25
                     )
 
-                    HorizontalDivider(color = AmoledBorder)
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outline)
 
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -644,14 +629,14 @@ fun SettingsHubScreen(
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
                             Text("Auto-Read AI Replies (Offline TTS)", style = MaterialTheme.typography.bodyMedium)
-                            Text("Auto-detects Hindi (Devanagari) & English", style = MaterialTheme.typography.labelMedium, color = TextSecondary)
+                            Text("Auto-detects Hindi (Devanagari) & English", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                         IconButton(onClick = { viewModel.togglePinnedSetting("auto_read_tts") }) {
                             val pinned = "auto_read_tts" in uiConfig.pinnedSettingIds
                             Icon(
                                 if (pinned) Icons.Filled.Star else Icons.Filled.StarOutline,
                                 contentDescription = "Pin Auto-Read TTS",
-                                tint = if (pinned) primaryColor else TextSecondary
+                                tint = if (pinned) primaryColor else MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
                         Switch(
@@ -680,8 +665,8 @@ fun SettingsHubScreen(
         if (matchesSearch("automation", "download", "wifi", "kaggle", "telegram", "mtproto", "2gb", "guide", "poll", "quota", "gpu", "watchdog", "webhook", "discord", "n8n", "slack")) {
         item {
             Card(
-                colors = CardDefaults.cardColors(containerColor = AmoledSurface),
-                border = BorderStroke(1.dp, AmoledBorder)
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
             ) {
                 Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Row(
@@ -703,7 +688,7 @@ fun SettingsHubScreen(
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
                             Text("Direct Kaggle → Telegram Upload (Up to 2 GB)", style = MaterialTheme.typography.bodyMedium)
-                            Text("Headless Telethon MTProto upload directly from Kaggle GPU", style = MaterialTheme.typography.labelMedium, color = TextSecondary)
+                            Text("Headless Telethon MTProto upload directly from Kaggle GPU", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                         Switch(
                             checked = settings.directKaggleTelegramUpload,
@@ -718,7 +703,7 @@ fun SettingsHubScreen(
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
                             Text("Save Mobile Data (Skip Phone Download if Sent to Telegram)", style = MaterialTheme.typography.bodyMedium)
-                            Text("Avoids pulling large MP4 onto phone; download a copy anytime in Queue", style = MaterialTheme.typography.labelMedium, color = TextSecondary)
+                            Text("Avoids pulling large MP4 onto phone; download a copy anytime in Queue", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                         Switch(
                             checked = settings.skipPhoneDownloadWhenSentToTelegram,
@@ -732,7 +717,7 @@ fun SettingsHubScreen(
                         onClick = { activeGuideId = PlatformGuideId.TELEGRAM_2GB }
                     )
 
-                    HorizontalDivider(color = AmoledBorder)
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outline)
 
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -741,14 +726,14 @@ fun SettingsHubScreen(
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
                             Text("Wi-Fi Only Auto-Download", style = MaterialTheme.typography.bodyMedium)
-                            Text("Pause Kaggle MP4 downloads when on mobile data", style = MaterialTheme.typography.labelMedium, color = TextSecondary)
+                            Text("Pause Kaggle MP4 downloads when on mobile data", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                         IconButton(onClick = { viewModel.togglePinnedSetting("wifi_only_dl") }) {
                             val pinned = "wifi_only_dl" in uiConfig.pinnedSettingIds
                             Icon(
                                 if (pinned) Icons.Filled.Star else Icons.Filled.StarOutline,
                                 contentDescription = "Pin Wi-Fi Only Download",
-                                tint = if (pinned) primaryColor else TextSecondary
+                                tint = if (pinned) primaryColor else MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
                         Switch(
@@ -757,7 +742,7 @@ fun SettingsHubScreen(
                         )
                     }
 
-                    Text("Kaggle Polling Interval", style = MaterialTheme.typography.labelMedium, color = TextSecondary)
+                    Text("Kaggle Polling Interval", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         AppSettingsRepository.VALID_POLL_INTERVALS.forEach { sec ->
                             FilterChip(
@@ -775,7 +760,7 @@ fun SettingsHubScreen(
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
                             Text("Auto-Clean Temp Files After Merge", style = MaterialTheme.typography.bodyMedium)
-                            Text("Purge Media3 scratch cache once MP4 is saved", style = MaterialTheme.typography.labelMedium, color = TextSecondary)
+                            Text("Purge Media3 scratch cache once MP4 is saved", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                         Switch(
                             checked = settings.autoCleanTempAfterMerge,
@@ -790,7 +775,7 @@ fun SettingsHubScreen(
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
                             Text("Tunnel Health Watchdog (WorkManager)", style = MaterialTheme.typography.bodyMedium)
-                            Text("Periodic background ping to Primary Tunnel /models", style = MaterialTheme.typography.labelMedium, color = TextSecondary)
+                            Text("Periodic background ping to Primary Tunnel /models", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                         Switch(
                             checked = tunnelWatchdogEnabled,
@@ -798,7 +783,7 @@ fun SettingsHubScreen(
                         )
                     }
 
-                    HorizontalDivider(color = AmoledBorder)
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outline)
                     val remainingQuota = (30.0 - weeklyUsedGpuHours).coerceAtLeast(0.0)
                     val isLowQuota = remainingQuota < 2.0
                     Text("Kaggle 30-Hour Weekly GPU Quota Tracker", style = MaterialTheme.typography.titleMedium)
@@ -823,12 +808,12 @@ fun SettingsHubScreen(
                         }
                     }
 
-                    HorizontalDivider(color = AmoledBorder)
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outline)
                     Text("Custom Webhook Alerts (Discord / n8n / Slack)", style = MaterialTheme.typography.titleMedium)
                     Text(
                         "Sends JSON event payloads on Kaggle render completion/failure and Daily RSS News Briefs.",
                         style = MaterialTheme.typography.labelMedium,
-                        color = TextSecondary
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     OutlinedTextField(
                         value = webhookUrlInput,
@@ -862,8 +847,8 @@ fun SettingsHubScreen(
         if (matchesSearch("news", "rss", "feed", "agent", "script", "brief", "workmanager")) {
         item {
             Card(
-                colors = CardDefaults.cardColors(containerColor = AmoledSurface),
-                border = BorderStroke(1.dp, AmoledBorder)
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
             ) {
                 Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -873,7 +858,7 @@ fun SettingsHubScreen(
                     Text(
                         "Polls custom RSS feeds in the background, drafts AI summaries & video angles, and notifies you for manual approval. Never auto-renders GPU.",
                         style = MaterialTheme.typography.labelMedium,
-                        color = TextSecondary
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
 
                     Row(
@@ -896,7 +881,7 @@ fun SettingsHubScreen(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Text("Interval:", style = MaterialTheme.typography.labelMedium, color = TextSecondary)
+                            Text("Interval:", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             AppSettingsRepository.VALID_NEWS_INTERVALS.forEach { hrs ->
                                 FilterChip(
                                     selected = settings.newsCheckIntervalHours == hrs,
@@ -939,8 +924,8 @@ fun SettingsHubScreen(
                     }
 
                     if (rssFeeds.isNotEmpty()) {
-                        HorizontalDivider(color = AmoledBorder)
-                        Text("Saved RSS Feeds (${rssFeeds.size})", style = MaterialTheme.typography.labelMedium, color = TextSecondary)
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outline)
+                        Text("Saved RSS Feeds (${rssFeeds.size})", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         rssFeeds.forEach { feed ->
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
@@ -949,7 +934,7 @@ fun SettingsHubScreen(
                             ) {
                                 Column(modifier = Modifier.weight(1f)) {
                                     Text(feed.name, style = MaterialTheme.typography.bodyMedium)
-                                    Text(feed.feedUrl, style = MaterialTheme.typography.labelMedium, color = TextSecondary, maxLines = 1)
+                                    Text(feed.feedUrl, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
                                 }
                                 IconButton(onClick = { viewModel.deleteRssFeed(feed) }) {
                                     Icon(Icons.Filled.Delete, contentDescription = "Delete RSS Feed", tint = CrimsonDanger)
@@ -959,18 +944,18 @@ fun SettingsHubScreen(
                     }
 
                     if (newsDigests.isNotEmpty()) {
-                        HorizontalDivider(color = AmoledBorder)
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outline)
                         Text("Pending AI Briefs for Approval (${newsDigests.size})", style = MaterialTheme.typography.labelMedium, color = EmeraldAccent)
                         newsDigests.take(3).forEach { digest ->
                             Surface(
-                                color = AmoledSurfaceVariant,
-                                border = BorderStroke(1.dp, AmoledBorder),
+                                color = MaterialTheme.colorScheme.surfaceVariant,
+                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
                                 shape = RoundedCornerShape(8.dp),
                                 modifier = Modifier.fillMaxWidth()
                             ) {
                                 Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                                     Text(digest.title, style = MaterialTheme.typography.titleMedium)
-                                    Text(digest.summaryText.take(220), style = MaterialTheme.typography.labelMedium, color = TextSecondary)
+                                    Text(digest.summaryText.take(220), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                         Button(
                                             onClick = {
@@ -1000,8 +985,8 @@ fun SettingsHubScreen(
         if (matchesSearch("niche", "auto", "type", "speed", "continuity", "loop", "summarize", "series", "next")) {
         item {
             Card(
-                colors = CardDefaults.cardColors(containerColor = AmoledSurface),
-                border = BorderStroke(1.dp, AmoledBorder)
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
             ) {
                 Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -1011,7 +996,7 @@ fun SettingsHubScreen(
                     Text(
                         "Control typewriter animation speed, automatic post-render sequel generation, niche rolling memory compression, and default Reels/Shorts seamless loop mode.",
                         style = MaterialTheme.typography.labelMedium,
-                        color = TextSecondary
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
 
                     Row(
@@ -1021,7 +1006,7 @@ fun SettingsHubScreen(
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
                             Text("Auto-Type Prompt Animation", style = MaterialTheme.typography.bodyMedium)
-                            Text("Type selected Next Command chips smoothly into prompt fields", style = MaterialTheme.typography.labelMedium, color = TextSecondary)
+                            Text("Type selected Next Command chips smoothly into prompt fields", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                         Switch(
                             checked = settings.autoTypeEnabled,
@@ -1029,7 +1014,7 @@ fun SettingsHubScreen(
                         )
                     }
 
-                    Text("Auto-Type Speed", style = MaterialTheme.typography.labelMedium, color = TextSecondary)
+                    Text("Auto-Type Speed", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         AutoTypeSpeedMode.entries.forEach { mode ->
                             FilterChip(
@@ -1047,7 +1032,7 @@ fun SettingsHubScreen(
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
                             Text("Auto-Generate Next Commands After Render", style = MaterialTheme.typography.bodyMedium)
-                            Text("Draft 4 non-repeating sequel & twist ideas when Kaggle finishes", style = MaterialTheme.typography.labelMedium, color = TextSecondary)
+                            Text("Draft 4 non-repeating sequel & twist ideas when Kaggle finishes", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                         Switch(
                             checked = settings.autoGenerateNextAfterRender,
@@ -1073,7 +1058,7 @@ fun SettingsHubScreen(
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
                             Text("Seamless Loop Default (Reels / Shorts)", style = MaterialTheme.typography.bodyMedium)
-                            Text("Default to syntactic lead-in endings & 0.25s tail micro-fade", style = MaterialTheme.typography.labelMedium, color = TextSecondary)
+                            Text("Default to syntactic lead-in endings & 0.25s tail micro-fade", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                         Switch(
                             checked = settings.seamlessLoopDefault,
@@ -1093,8 +1078,8 @@ fun SettingsHubScreen(
             var defaultOwnerDraft by remember(settings.defaultGithubOwner) { mutableStateOf(settings.defaultGithubOwner) }
             var defaultBranchDraft by remember(settings.defaultGithubBranch) { mutableStateOf(settings.defaultGithubBranch) }
             Card(
-                colors = CardDefaults.cardColors(containerColor = AmoledSurface),
-                border = BorderStroke(1.dp, AmoledBorder)
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
             ) {
                 Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -1104,7 +1089,7 @@ fun SettingsHubScreen(
                     Text(
                         "Configure defaults for the zero-dependency Atomic GitHub Git Data API engine, live GitHub Actions build monitor, and AI commit messages.",
                         style = MaterialTheme.typography.labelMedium,
-                        color = TextSecondary
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
 
                     OutlinedTextField(
@@ -1136,7 +1121,7 @@ fun SettingsHubScreen(
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
                             Text("Auto-Watch GitHub Actions After Push", style = MaterialTheme.typography.bodyMedium)
-                            Text("Automatically poll workflow run status every 15s and surface OTA APK install on success", style = MaterialTheme.typography.labelMedium, color = TextSecondary)
+                            Text("Automatically poll workflow run status every 15s and surface OTA APK install on success", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                         Switch(
                             checked = settings.autoWatchActionsAfterPush,
@@ -1151,7 +1136,7 @@ fun SettingsHubScreen(
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
                             Text("AI Auto-Commit Message", style = MaterialTheme.typography.bodyMedium)
-                            Text("Generate Conventional Commit messages automatically from local SHA-256 diffs", style = MaterialTheme.typography.labelMedium, color = TextSecondary)
+                            Text("Generate Conventional Commit messages automatically from local SHA-256 diffs", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                         Switch(
                             checked = settings.aiAutoCommitMessageEnabled,
@@ -1169,8 +1154,8 @@ fun SettingsHubScreen(
         if (matchesSearch("security", "privacy", "biometric", "pin", "lock", "decoy", "duress", "flag_secure", "wipe", "panic", "backup", "audit")) {
         item {
             Card(
-                colors = CardDefaults.cardColors(containerColor = AmoledSurface),
-                border = BorderStroke(1.dp, AmoledBorder)
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
             ) {
                 Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text("4. Security & Privacy Controls", style = MaterialTheme.typography.titleMedium, color = primaryColor)
@@ -1186,7 +1171,7 @@ fun SettingsHubScreen(
                             Icon(
                                 if (pinned) Icons.Filled.Star else Icons.Filled.StarOutline,
                                 contentDescription = "Pin App Lock",
-                                tint = if (pinned) primaryColor else TextSecondary
+                                tint = if (pinned) primaryColor else MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
                         Switch(
@@ -1195,7 +1180,7 @@ fun SettingsHubScreen(
                         )
                     }
 
-                    Text("Auto-Lock Timeout", style = MaterialTheme.typography.labelMedium, color = TextSecondary)
+                    Text("Auto-Lock Timeout", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         AutoLockTimeout.entries.forEach { timeout ->
                             FilterChip(
@@ -1217,7 +1202,7 @@ fun SettingsHubScreen(
                             Icon(
                                 if (pinned) Icons.Filled.Star else Icons.Filled.StarOutline,
                                 contentDescription = "Pin FLAG_SECURE",
-                                tint = if (pinned) primaryColor else TextSecondary
+                                tint = if (pinned) primaryColor else MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
                         Switch(
@@ -1226,17 +1211,17 @@ fun SettingsHubScreen(
                         )
                     }
 
-                    HorizontalDivider(color = AmoledBorder)
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outline)
                     Text("Duress / Decoy PIN Mode (Salted SHA-256)", style = MaterialTheme.typography.titleMedium)
                     Text(
                         "Entering your Decoy PIN unlocks a harmless Quick Notes sandbox with zero access to real Vault keys, chats, or videos — without wiping real data.",
                         style = MaterialTheme.typography.labelMedium,
-                        color = TextSecondary
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     Text(
                         text = "Master PIN: ${if (hasMasterPin) "Configured" else "Not set"}  ·  Decoy PIN: ${if (hasDecoyPin) "Configured" else "Not set"}",
                         style = MaterialTheme.typography.labelMedium,
-                        color = if (hasDecoyPin) EmeraldAccent else TextSecondary
+                        color = if (hasDecoyPin) EmeraldAccent else MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
                         OutlinedTextField(
@@ -1293,12 +1278,12 @@ fun SettingsHubScreen(
                         ) { Text("Clear PINs") }
                     }
 
-                    HorizontalDivider(color = AmoledBorder)
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outline)
                     Text("Failed PIN Audit Log & Emergency Auto-Wipe", style = MaterialTheme.typography.titleMedium)
                     Text(
                         "Automatically trigger full Panic Wipe if an intruder exceeds consecutive failed PIN attempts:",
                         style = MaterialTheme.typography.labelMedium,
-                        color = TextSecondary
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         listOf(0 to "Off", 5 to "5 Failures", 10 to "10 Failures").forEach { (limit, label) ->
@@ -1310,8 +1295,8 @@ fun SettingsHubScreen(
                         }
                     }
                     Surface(
-                        color = AmoledSurfaceVariant,
-                        border = BorderStroke(1.dp, AmoledBorder),
+                        color = MaterialTheme.colorScheme.surfaceVariant,
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
                         shape = RoundedCornerShape(8.dp),
                         modifier = Modifier.fillMaxWidth()
                     ) {
@@ -1336,7 +1321,7 @@ fun SettingsHubScreen(
                                 Text(
                                     "No unauthorized PIN attempts recorded.",
                                     style = MaterialTheme.typography.labelMedium,
-                                    color = TextSecondary
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             } else {
                                 failedPinAuditLog.take(6).forEach { entry ->
@@ -1351,8 +1336,8 @@ fun SettingsHubScreen(
                         }
                     }
 
-                    HorizontalDivider(color = AmoledBorder)
-                    Text("AES-256 Encrypted .omniai Backup (SAF)", style = MaterialTheme.typography.labelMedium, color = TextSecondary)
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outline)
+                    Text("AES-256 Encrypted .omniai Backup (SAF)", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
                         OutlinedButton(
                             onClick = { pendingBackupMode = "EXPORT" },
@@ -1392,8 +1377,8 @@ fun SettingsHubScreen(
         if (matchesSearch("storage", "cache", "ota", "update", "github", "crash", "diagnostics", "log", "version")) {
         item {
             Card(
-                colors = CardDefaults.cardColors(containerColor = AmoledSurface),
-                border = BorderStroke(1.dp, AmoledBorder)
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
             ) {
                 Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text("5. Storage, OTA Updates & Crash Diagnostics", style = MaterialTheme.typography.titleMedium, color = primaryColor)
@@ -1402,7 +1387,7 @@ fun SettingsHubScreen(
                         text = "Videos: %.2f MB  ·  Merged: %.2f MB  ·  Cache: %.2f MB  ·  Room DB: %.2f MB"
                             .format(storage.videosMb, storage.mergedMb, storage.tempCacheMb, storage.dbMb),
                         style = MaterialTheme.typography.labelMedium,
-                        color = TextSecondary
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     OutlinedButton(
                         onClick = { viewModel.cleanTempCache() },
@@ -1413,12 +1398,12 @@ fun SettingsHubScreen(
                         Text("1-Tap Clear Temp & OTA Cache")
                     }
 
-                    HorizontalDivider(color = AmoledBorder)
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outline)
 
                     Text(
                         otaState.message ?: "Current Build: v${BuildConfig.VERSION_NAME} (code ${BuildConfig.VERSION_CODE})",
                         style = MaterialTheme.typography.bodyMedium,
-                        color = TextSecondary
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     if (otaState.isDownloading) {
                         LinearProgressIndicator(
@@ -1452,9 +1437,9 @@ fun SettingsHubScreen(
                         }
                     }
 
-                    HorizontalDivider(color = AmoledBorder)
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outline)
 
-                    Text("Local Crash Diagnostics (filesDir/crash_log.txt)", style = MaterialTheme.typography.labelMedium, color = TextSecondary)
+                    Text("Local Crash Diagnostics (filesDir/crash_log.txt)", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
                         OutlinedButton(
                             onClick = {
@@ -1485,8 +1470,8 @@ fun SettingsHubScreen(
         if (matchesSearch("media", "external", "apps", "adobe", "express", "firefly", "thumbnail", "bind", "package")) {
             item {
                 Card(
-                    colors = CardDefaults.cardColors(containerColor = AmoledSurface),
-                    border = BorderStroke(1.dp, AmoledBorder)
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
                 ) {
                     Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         Row(
@@ -1504,7 +1489,7 @@ fun SettingsHubScreen(
                                     Text(
                                         "Adobe Express & Firefly App Binding (Strictly Native Apps)",
                                         style = MaterialTheme.typography.labelMedium,
-                                        color = TextSecondary
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
                                 }
                             }
@@ -1515,8 +1500,8 @@ fun SettingsHubScreen(
 
                         // Adobe Express Row
                         Surface(
-                            color = AmoledSurfaceVariant,
-                            border = BorderStroke(1.dp, AmoledBorder),
+                            color = MaterialTheme.colorScheme.surfaceVariant,
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
                             shape = RoundedCornerShape(10.dp),
                             modifier = Modifier.fillMaxWidth()
                         ) {
@@ -1552,7 +1537,7 @@ fun SettingsHubScreen(
                                     text = "Package: ${adobeExpressStatus.resolvedPackage ?: adobeExpressStatus.configuredPackage}",
                                     fontFamily = FontFamily.Monospace,
                                     style = MaterialTheme.typography.labelSmall,
-                                    color = TextSecondary
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                                 OutlinedButton(
                                     onClick = { adobePickerTarget = AdobeTargetApp.ADOBE_EXPRESS },
@@ -1565,8 +1550,8 @@ fun SettingsHubScreen(
 
                         // Adobe Firefly Row
                         Surface(
-                            color = AmoledSurfaceVariant,
-                            border = BorderStroke(1.dp, AmoledBorder),
+                            color = MaterialTheme.colorScheme.surfaceVariant,
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
                             shape = RoundedCornerShape(10.dp),
                             modifier = Modifier.fillMaxWidth()
                         ) {
@@ -1602,7 +1587,7 @@ fun SettingsHubScreen(
                                     text = "Package: ${adobeFireflyStatus.resolvedPackage ?: adobeFireflyStatus.configuredPackage}",
                                     fontFamily = FontFamily.Monospace,
                                     style = MaterialTheme.typography.labelSmall,
-                                    color = TextSecondary
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                                 OutlinedButton(
                                     onClick = { adobePickerTarget = AdobeTargetApp.ADOBE_FIREFLY },
@@ -1622,7 +1607,7 @@ fun SettingsHubScreen(
     pendingIconVariant?.let { target ->
         AlertDialog(
             onDismissRequest = { pendingIconVariant = null },
-            containerColor = AmoledSurface,
+            containerColor = MaterialTheme.colorScheme.surface,
             title = { Text("Apply Launcher Icon Switch?") },
             text = {
                 Text(
@@ -1650,7 +1635,7 @@ fun SettingsHubScreen(
     if (showCrashLogDialog) {
         AlertDialog(
             onDismissRequest = { showCrashLogDialog = false },
-            containerColor = AmoledSurface,
+            containerColor = MaterialTheme.colorScheme.surface,
             title = { Text("Crash Diagnostics Log") },
             text = {
                 Column(
@@ -1663,7 +1648,7 @@ fun SettingsHubScreen(
                         text = crashLog.ifBlank { "No uncaught crashes recorded in filesDir/crash_log.txt." },
                         fontFamily = FontFamily.Monospace,
                         style = MaterialTheme.typography.labelMedium,
-                        color = TextSecondary
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             },
@@ -1692,14 +1677,14 @@ fun SettingsHubScreen(
         val isExport = pendingBackupMode == "EXPORT"
         AlertDialog(
             onDismissRequest = { pendingBackupMode = null },
-            containerColor = AmoledSurface,
+            containerColor = MaterialTheme.colorScheme.surface,
             title = { Text(if (isExport) "Encrypt .omniai Backup" else "Decrypt .omniai Backup") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(
                         "Enter a passphrase (min 6 chars) for PBKDF2-SHA256 + AES-256-GCM.",
                         style = MaterialTheme.typography.bodyMedium,
-                        color = TextSecondary
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     OutlinedTextField(
                         value = backupPassword,
@@ -1736,7 +1721,7 @@ fun SettingsHubScreen(
     if (panicStep == 1) {
         AlertDialog(
             onDismissRequest = { panicStep = 0 },
-            containerColor = AmoledSurface,
+            containerColor = MaterialTheme.colorScheme.surface,
             title = { Text("Confirm Panic Wipe (1/2)") },
             text = { Text("Shred EncryptedSharedPreferences, clear Room database, and purge all local renders & crash logs?") },
             confirmButton = {
@@ -1754,7 +1739,7 @@ fun SettingsHubScreen(
     if (panicStep == 2) {
         AlertDialog(
             onDismissRequest = { panicStep = 0 },
-            containerColor = AmoledSurface,
+            containerColor = MaterialTheme.colorScheme.surface,
             title = { Text("FINAL WARNING: Shred All Data (2/2)") },
             text = { Text("Action cannot be undone. Confirm immediate cryptographic shred?") },
             confirmButton = {

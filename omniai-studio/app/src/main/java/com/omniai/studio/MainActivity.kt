@@ -61,8 +61,10 @@ import com.omniai.studio.ui.screens.ContentHubScreen
 import com.omniai.studio.ui.screens.DecoySandboxScreen
 import com.omniai.studio.ui.screens.DownloadsGalleryScreen
 import com.omniai.studio.ui.screens.HomeBentoScreen
+import com.omniai.studio.ui.screens.InitialSetupScreen
 import com.omniai.studio.ui.screens.PendingApprovalLockScreen
 import com.omniai.studio.ui.screens.ProjectDashboardScreen
+import com.omniai.studio.ui.screens.ResearchLabScreen
 import com.omniai.studio.ui.screens.SettingsHubScreen
 import com.omniai.studio.ui.screens.TerminalScreen
 import com.omniai.studio.ui.screens.UiThemeStudioScreen
@@ -82,6 +84,7 @@ private fun legacyIndexToTab(index: Int): StudioTabId = when (index) {
     6 -> StudioTabId.CONTENT_HUB
     7 -> StudioTabId.PROJECTS
     8 -> StudioTabId.HOME
+    9 -> StudioTabId.RESEARCH
     else -> StudioTabId.HOME
 }
 
@@ -189,34 +192,34 @@ class MainActivity : FragmentActivity() {
                     PrivacyShieldHelper.applyFlagSecure(this@MainActivity, flagSecure)
                 }
 
-                LaunchedEffect(pendingVoiceAutoLaunch) {
-                    if (pendingVoiceAutoLaunch) {
+                LaunchedEffect(appSettings.initialSetupComplete, pendingVoiceAutoLaunch) {
+                    if (appSettings.initialSetupComplete && pendingVoiceAutoLaunch) {
                         navigateToTab(StudioTabId.CHAT)
                     }
                 }
 
-                LaunchedEffect(pendingOcrAutoLaunch) {
-                    if (pendingOcrAutoLaunch) {
+                LaunchedEffect(appSettings.initialSetupComplete, pendingOcrAutoLaunch) {
+                    if (appSettings.initialSetupComplete && pendingOcrAutoLaunch) {
                         navigateToTab(StudioTabId.CHAT)
                     }
                 }
 
-                LaunchedEffect(pendingOpenBackupCenter) {
-                    if (pendingOpenBackupCenter) {
+                LaunchedEffect(appSettings.initialSetupComplete, pendingOpenBackupCenter) {
+                    if (appSettings.initialSetupComplete && pendingOpenBackupCenter) {
                         activeOverlay = "BACKUP_CENTER"
                         viewModel.consumeOpenBackupCenter()
                     }
                 }
 
-                LaunchedEffect(pendingLaunchTab) {
-                    pendingLaunchTab?.let { targetIndex ->
+                LaunchedEffect(appSettings.initialSetupComplete, pendingLaunchTab) {
+                    if (appSettings.initialSetupComplete) pendingLaunchTab?.let { targetIndex ->
                         navigateToTab(legacyIndexToTab(targetIndex))
                         viewModel.consumeLaunchTab()
                     }
                 }
 
-                LaunchedEffect(pendingOpenSocialPostId) {
-                    if (pendingOpenSocialPostId != null) {
+                LaunchedEffect(appSettings.initialSetupComplete, pendingOpenSocialPostId) {
+                    if (appSettings.initialSetupComplete && pendingOpenSocialPostId != null) {
                         navigateToTab(StudioTabId.CONTENT_HUB)
                     }
                 }
@@ -229,9 +232,9 @@ class MainActivity : FragmentActivity() {
                 }
 
                 Box(modifier = Modifier.fillMaxSize()) {
-                    // Hub-and-Spoke Navigation Shell (4-Tab Bar + Slide-Out Drawer + Slim 56dp TopAppBar)
-                    // Open Universal Command Palette via TopAppBar Search action
-                    AppNavigationShell(
+                    if (appSettings.initialSetupComplete) {
+                        // Hub-and-Spoke Navigation Shell (4-Tab Bar + Slide-Out Drawer + Slim 56dp TopAppBar)
+                        AppNavigationShell(
                         viewModel = viewModel,
                         selectedTab = selectedTab,
                         pinnedBottomTabs = pinnedBottomTabs,
@@ -298,7 +301,7 @@ class MainActivity : FragmentActivity() {
                                 }
                             }
                         }
-                    ) { innerPadding ->
+                        ) { innerPadding ->
                         Box(
                             modifier = Modifier
                                 .fillMaxSize()
@@ -314,7 +317,6 @@ class MainActivity : FragmentActivity() {
                                     onOpenCloudAccount = { activeOverlay = "CLOUD_ACCOUNT" },
                                     onOpenAnalytics = { activeOverlay = "ANALYTICS" },
                                     onOpenThemeStudio = { activeOverlay = "THEME_STUDIO" },
-                                    onOpenTerminal = { navigateToTab(StudioTabId.TERMINAL) },
                                     onRunGuideCommandInTerminal = ::runGuideCommandInTerminal
                                 )
                                 "CLOUD_ACCOUNT" -> CloudAccountScreen(
@@ -369,7 +371,11 @@ class MainActivity : FragmentActivity() {
                                             onOpenContentHub = { navigateToTab(StudioTabId.CONTENT_HUB) }
                                         )
                                         StudioTabId.MERGER -> VideoMergerScreen(viewModel = viewModel)
-                                        StudioTabId.TERMINAL -> TerminalScreen(viewModel = viewModel)
+                                        StudioTabId.TERMINAL -> TerminalScreen(
+                                            viewModel = viewModel,
+                                            activity = this@MainActivity,
+                                            biometricManager = app.biometricAuthManager
+                                        )
                                         StudioTabId.GALLERY -> DownloadsGalleryScreen(
                                             viewModel = viewModel,
                                             onOpenContentHub = { navigateToTab(StudioTabId.CONTENT_HUB) },
@@ -380,6 +386,7 @@ class MainActivity : FragmentActivity() {
                                             onResumeChat = { navigateToTab(StudioTabId.CHAT) },
                                             onOpenDirector = { navigateToTab(StudioTabId.DIRECTOR) }
                                         )
+                                        StudioTabId.RESEARCH -> ResearchLabScreen(viewModel = viewModel)
                                         StudioTabId.PROJECTS -> ProjectDashboardScreen(
                                             viewModel = viewModel,
                                             onOpenChat = { navigateToTab(StudioTabId.CHAT) },
@@ -402,6 +409,12 @@ class MainActivity : FragmentActivity() {
                             }
                         }
                     }
+                    } else {
+                        InitialSetupScreen(
+                            viewModel = viewModel,
+                            onCompleted = { selectedTabName = StudioTabId.HOME.name }
+                        )
+                    }
 
                     // Keep unpinnedTabs count accessible for Settings & Command Palette parity
                     if (unpinnedTabs.isEmpty() && false) {
@@ -409,7 +422,7 @@ class MainActivity : FragmentActivity() {
                     }
 
                     // Universal Command Palette (Spotlight / Ctrl+K)
-                    if (showCommandPalette) {
+                    if (appSettings.initialSetupComplete && showCommandPalette) {
                         CommandPaletteDialog(
                             viewModel = viewModel,
                             onDismiss = { showCommandPalette = false },
@@ -419,7 +432,7 @@ class MainActivity : FragmentActivity() {
                     }
 
                     // Create Custom Workspace Dialog
-                    if (showCreateWorkspaceDialog) {
+                    if (appSettings.initialSetupComplete && showCreateWorkspaceDialog) {
                         AlertDialog(
                             onDismissRequest = { showCreateWorkspaceDialog = false },
                             containerColor = colorScheme.surface,
@@ -465,7 +478,7 @@ class MainActivity : FragmentActivity() {
                     }
 
                     // Android Share-to-AI Receiver Popup (ACTION_SEND text/plain)
-                    pendingSharedText?.let { shared ->
+                    if (appSettings.initialSetupComplete) pendingSharedText?.let { shared ->
                         AlertDialog(
                             onDismissRequest = { viewModel.dismissSharedText() },
                             containerColor = colorScheme.surface,

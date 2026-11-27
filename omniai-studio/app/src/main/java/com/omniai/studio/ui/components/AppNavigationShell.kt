@@ -29,6 +29,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -66,6 +67,8 @@ import androidx.compose.material.icons.filled.Workspaces
 import androidx.compose.material3.BottomSheetDefaults
 import androidx.compose.material3.Button
 import androidx.compose.material3.DrawerValue
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -82,6 +85,7 @@ import androidx.compose.material3.NavigationDrawerItem
 import androidx.compose.material3.NavigationDrawerItemDefaults
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Snackbar
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
@@ -106,6 +110,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.omniai.studio.cloud.CloudUserRole
+import com.omniai.studio.data.local.AiPurposeMode
 import com.omniai.studio.data.local.NicheEntity
 import com.omniai.studio.settings.StudioTabId
 import com.omniai.studio.ui.screens.RoleGuardBanner
@@ -133,6 +138,7 @@ fun iconForStudioTab(tab: StudioTabId): ImageVector = when (tab) {
     StudioTabId.TERMINAL -> Icons.Filled.Terminal
     StudioTabId.GALLERY -> Icons.Filled.Download
     StudioTabId.CONTENT_HUB -> Icons.Filled.Storage
+    StudioTabId.RESEARCH -> Icons.Filled.Search
     StudioTabId.VAULT -> Icons.Filled.Security
 }
 
@@ -166,6 +172,7 @@ fun AppNavigationShell(
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
 
     val niches by viewModel.niches.collectAsState()
+    val appSettings by viewModel.appSettings.collectAsState()
     val activeNiche by viewModel.activeNiche.collectAsState()
     val filterAllNiches by viewModel.filterAllNiches.collectAsState()
     val isAutoFillingNiche by viewModel.isAutoFillingNiche.collectAsState()
@@ -208,6 +215,8 @@ fun AppNavigationShell(
     var showLanStudioSheet by remember { mutableStateOf(false) }
     var showNicheEditorDialog by remember { mutableStateOf(false) }
     var editingNiche by remember { mutableStateOf<NicheEntity?>(null) }
+    var showWorkspaceManager by remember { mutableStateOf(false) }
+    var showPurposeModeMenu by remember { mutableStateOf(false) }
 
     val activeRenderJobs = remember(renderJobs) {
         renderJobs.filter { it.status in setOf("QUEUED", "PUSHED", "RENDERING", "DOWNLOADING") }
@@ -325,12 +334,25 @@ fun AppNavigationShell(
                                                 modifier = Modifier.size(18.dp)
                                             )
                                         }
+                                        IconButton(
+                                            onClick = { showWorkspaceManager = true },
+                                            modifier = Modifier.size(28.dp)
+                                        ) {
+                                            Icon(
+                                                Icons.Filled.Edit,
+                                                contentDescription = "Manage Workspace Profiles",
+                                                tint = colorScheme.onSurfaceVariant,
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                        }
                                     }
                                     Row(
-                                        modifier = Modifier.fillMaxWidth(),
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .horizontalScroll(rememberScrollState()),
                                         horizontalArrangement = Arrangement.spacedBy(6.dp)
                                     ) {
-                                        workspaces.take(3).forEach { ws ->
+                                        workspaces.forEach { ws ->
                                             val isWsSelected = ws.id == activeWorkspaceId
                                             Surface(
                                                 onClick = { viewModel.switchWorkspace(ws.id) },
@@ -340,7 +362,7 @@ fun AppNavigationShell(
                                                     1.dp,
                                                     if (isWsSelected) colorScheme.primary.omniAccentBorder() else colorScheme.outline
                                                 ),
-                                                modifier = Modifier.weight(1f)
+                                                modifier = Modifier.width(104.dp)
                                             ) {
                                                 Text(
                                                     text = ws.name,
@@ -350,6 +372,37 @@ fun AppNavigationShell(
                                                     overflow = TextOverflow.Ellipsis,
                                                     modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)
                                                 )
+                                            }
+                                        }
+                                    }
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            "Global AI Purpose",
+                                            style = MaterialTheme.typography.labelMedium,
+                                            color = colorScheme.onSurfaceVariant
+                                        )
+                                        Box {
+                                            OutlinedButton(onClick = { showPurposeModeMenu = true }) {
+                                                Text(appSettings.aiPurposeMode.label)
+                                                Icon(Icons.Filled.ExpandMore, contentDescription = null)
+                                            }
+                                            DropdownMenu(
+                                                expanded = showPurposeModeMenu,
+                                                onDismissRequest = { showPurposeModeMenu = false }
+                                            ) {
+                                                AiPurposeMode.entries.forEach { mode ->
+                                                    DropdownMenuItem(
+                                                        text = { Text(mode.label) },
+                                                        onClick = {
+                                                            viewModel.setAiPurposeMode(mode)
+                                                            showPurposeModeMenu = false
+                                                        }
+                                                    )
+                                                }
                                             }
                                         }
                                     }
@@ -377,6 +430,12 @@ fun AppNavigationShell(
                         badgeText = videoScripts.size.takeIf { it > 0 }?.toString(),
                         selected = activeOverlay == "NONE" && selectedTab == StudioTabId.CONTENT_HUB,
                         onClick = { closeDrawerAnd { onOpenOverlay("NONE"); onSelectTab(StudioTabId.CONTENT_HUB) } }
+                    )
+                    DrawerToolItem(
+                        label = "Research Lab (PDF, notebooks, data)",
+                        icon = Icons.Filled.Search,
+                        selected = activeOverlay == "NONE" && selectedTab == StudioTabId.RESEARCH,
+                        onClick = { closeDrawerAnd { onOpenOverlay("NONE"); onSelectTab(StudioTabId.RESEARCH) } }
                     )
                     DrawerToolItem(
                         label = "Offline Gallery & Downloads",
@@ -481,7 +540,17 @@ fun AppNavigationShell(
     ) {
         Scaffold(
             containerColor = colorScheme.background,
-            snackbarHost = { SnackbarHost(snackbarHostState) },
+            snackbarHost = {
+                SnackbarHost(snackbarHostState) { data ->
+                    Snackbar(
+                        snackbarData = data,
+                        containerColor = colorScheme.surfaceVariant,
+                        contentColor = colorScheme.onSurfaceVariant,
+                        actionColor = colorScheme.primary,
+                        dismissActionContentColor = colorScheme.onSurfaceVariant
+                    )
+                }
+            },
             topBar = {
                 AnimatedVisibility(
                     visible = activeOverlay == "NONE" && !hideChrome,
@@ -1094,6 +1163,16 @@ fun AppNavigationShell(
                 showNicheEditorDialog = false
             },
             onDismiss = { showNicheEditorDialog = false }
+        )
+    }
+
+    if (showWorkspaceManager) {
+        WorkspaceProfileManagerDialog(
+            profiles = workspaces,
+            activeProfileId = activeWorkspaceId,
+            onSwitch = viewModel::switchWorkspace,
+            onSave = viewModel::updateWorkspace,
+            onDismiss = { showWorkspaceManager = false }
         )
     }
 }

@@ -41,9 +41,26 @@ Hardened Native Android Application (Kotlin + Jetpack Compose + Material 3 Live 
 1. **Kaggle Worker Sync (`.github/workflows/sync-kaggle-worker.yml`)**:
    - `KAGGLE_USERNAME`
    - `KAGGLE_KEY`
-2. **Optional Signed Release APK (`.github/workflows/build-release-apk.yml`)**:
+2. **Required Stable Release Signing (`.github/workflows/build-release-apk.yml`)**:
    - `KEYSTORE_BASE64`, `KEYSTORE_PASS`, `KEY_ALIAS`, `KEY_PASS`
-   - If omitted, the workflow automatically falls back to `gradle assembleDebug` and publishes `OmniAI-Studio-v4.5.<run_number>.apk` to GitHub Releases.
+   - Use the same keystore for every release. Android only installs an update over an existing app when its package ID and signing certificate match; the workflow now fails rather than publishing an incompatible debug-signed APK when these secrets are missing.
+   - To update an existing installation without uninstalling, the configured keystore must also match the certificate used to sign that installation. Android cannot change an installed app's signing certificate in place.
+
+## Private Supabase API Credential Sync
+- Configure Supabase and sign in, then run `supabase schema` in OmniCLI. Copy the printed SQL and run it once in Supabase Dashboard → SQL Editor; public PostgREST endpoints cannot execute DDL.
+- Run `supabase keys push` to save the configured API credentials to `public.user_api_credentials`, or `supabase keys pull` on another device signed into the same account.
+- The dedicated table uses `auth.uid() = user_id` RLS policies and is separate from shared `omni_sync_records`. Other signed-in users cannot access a user's row through the app. Supabase project administrators/service-role holders remain privileged and can access database contents; this is account isolation, not end-to-end encryption.
+- The app uses the signed-in user's JWT and public anon key only; never put a Supabase service-role key in the app.
+- Compatible AI-provider entries, generic platform credentials, and the optional Brave Search key are included in encrypted local backups and the same user-scoped credential sync; database administrators remain privileged.
+
+## Workspace Profiles & Research Lab
+- Switch or edit isolated workspace profiles (Personal, Creator Studio, Research Lab, or custom profiles) from the navigation drawer; the global AI purpose mode can be set independently.
+- Fresh installs start with a guided profile/purpose and AI-provider setup; API credentials are stored in the encrypted local vault. Existing installations are not sent through first-run setup again.
+- Research Lab supports PDF OCR/text analysis, Jupyter notebook source and saved-output inspection (notebook code is never executed), single-page web extraction, copyable LaTeX source, and local CSV line graphs.
+- Document analysis is bounded to 12 PDF pages; CSV graphs are limited to 1,000 data rows and five numeric series.
+- The encrypted Vault supports additional OpenAI-compatible chat endpoints (including DeepSeek, OpenAI, OpenRouter, Groq, Mistral, Together, Fireworks, Cerebras, and custom endpoints) plus generic platform credential records. Generic AWS/Oracle credentials are stored securely but do not imply those vendor workflows are integrated.
+- Trend discovery is tap-to-run only: it reads Google Trends RSS and enabled RSS feeds, can use a Brave Search API key, uses the selected niche to suggest related trends, niche profiles, and themes, and is cancelled when the screen stops or the workspace changes.
+- Video Director's optional multi-character mode generates recurring named speakers. Dialogue lines can be edited per scene with independent English/Hindi male/female voices; the Kaggle worker synthesizes each speaker separately and creates speaker-labelled synchronized subtitles.
 
 ## Local Build
 ```bash
