@@ -47,11 +47,12 @@ Hardened Native Android Application (Kotlin + Jetpack Compose + Material 3 Live 
    - To update an existing installation without uninstalling, the configured keystore must also match the certificate used to sign that installation. Android cannot change an installed app's signing certificate in place.
 
 ## Private Supabase API Credential Sync
-- Configure Supabase and sign in, then run `supabase schema` in OmniCLI. Copy the printed SQL and run it once in Supabase Dashboard → SQL Editor; public PostgREST endpoints cannot execute DDL.
-- Run `supabase keys push` to save the configured API credentials to `public.user_api_credentials`, or `supabase keys pull` on another device signed into the same account.
-- The dedicated table uses `auth.uid() = user_id` RLS policies and is separate from shared `omni_sync_records`. Other signed-in users cannot access a user's row through the app. Supabase project administrators/service-role holders remain privileged and can access database contents; this is account isolation, not end-to-end encryption.
+- Add `SUPABASE_URL` and `SUPABASE_ANON_KEY` to `local.properties` for local builds. The release workflow supplies the configured public client values to Gradle; the separate keep-alive workflow can use matching Actions secrets. Never put a Supabase service-role key in the app.
+- Run the repository's `supabase/schema_and_rls.sql` (also printed by `supabase schema` in an OWNER/debug app) in Supabase Dashboard → SQL Editor before signing in; public PostgREST endpoints cannot execute DDL. Google sign-in creates a first approved OWNER only when no OWNER profile exists; later profiles start as unapproved PENDING.
+- Approved OWNER accounts can run `supabase keys push` to save API credentials to `public.user_api_credentials`, or `supabase keys pull` on another device signed into the same account.
+- API credential backup is restricted to approved OWNER accounts and stored separately from shared `omni_sync_records`. Supabase project administrators/service-role holders remain privileged and can access database contents; this is account isolation, not end-to-end encryption.
 - The app uses the signed-in user's JWT and public anon key only; never put a Supabase service-role key in the app.
-- Compatible AI-provider entries, generic platform credentials, and the optional Brave Search key are included in encrypted local backups and the same user-scoped credential sync; database administrators remain privileged.
+- Compatible AI-provider entries, generic platform credentials, and the optional Brave Search key are included in encrypted local backups and the OWNER-scoped credential sync; database administrators remain privileged.
 
 ## Workspace Profiles & Research Lab
 - Switch or edit isolated workspace profiles (Personal, Creator Studio, Research Lab, or custom profiles) from the navigation drawer; the global AI purpose mode can be set independently.

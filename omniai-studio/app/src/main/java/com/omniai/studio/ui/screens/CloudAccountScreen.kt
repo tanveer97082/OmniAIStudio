@@ -70,6 +70,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.omniai.studio.BuildConfig
 import com.omniai.studio.cloud.CloudUserProfile
 import com.omniai.studio.cloud.CloudUserRole
 import com.omniai.studio.ui.guides.PlatformGuideBottomSheet
@@ -131,9 +132,8 @@ fun CloudAccountScreen(
     val syncIntervalMinutes by viewModel.cloudSyncIntervalMinutes.collectAsState()
     val syncWifiOnly by viewModel.cloudSyncWifiOnly.collectAsState()
 
-    var supabaseUrlInput by remember { mutableStateOf(viewModel.vault.supabaseUrl) }
-    var supabaseAnonKeyInput by remember { mutableStateOf(viewModel.vault.supabaseAnonKey) }
     var showSupabaseGuide by remember { mutableStateOf(false) }
+    val canViewSupabaseGuide = BuildConfig.DEBUG || session.role == CloudUserRole.OWNER
 
     LaunchedEffect(capabilities.canManageUsers, session.isSignedIn) {
         if (capabilities.canManageUsers && session.isSignedIn) {
@@ -370,7 +370,7 @@ fun CloudAccountScreen(
                 }
             }
 
-            // 3. Supabase Project Connection & Setup Guide
+            // 3. Bundled Supabase Project Connection
             item {
                 OmniSurfaceCard {
                     Row(
@@ -386,49 +386,22 @@ fun CloudAccountScreen(
                             Icon(Icons.Filled.Key, contentDescription = null, tint = EmeraldAccent)
                             Text("Supabase Project Config", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
                         }
-                        PlatformGuideTriggerButton(
-                            onClick = { showSupabaseGuide = true }
-                        )
-                    }
-
-                    OutlinedTextField(
-                        value = supabaseUrlInput,
-                        onValueChange = { supabaseUrlInput = it },
-                        label = { Text("SUPABASE_URL (https://<ref>.supabase.co)") },
-                        singleLine = true,
-                        enabled = capabilities.canWriteVault,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-
-                    OutlinedTextField(
-                        value = supabaseAnonKeyInput,
-                        onValueChange = { supabaseAnonKeyInput = it },
-                        label = { Text("SUPABASE_ANON_KEY (anon public key)") },
-                        singleLine = true,
-                        enabled = capabilities.canWriteVault,
-                        visualTransformation = PasswordVisualTransformation(),
-                        modifier = Modifier.fillMaxWidth()
-                    )
-
-                    if (!capabilities.canWriteVault) {
-                        Text(
-                            text = "Owner Only: ${session.role.label} role cannot modify Supabase project credentials.",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = AmberWarning
-                        )
-                    } else {
-                        Button(
-                            onClick = {
-                                viewModel.saveSupabaseConfig(supabaseUrlInput, supabaseAnonKeyInput)
-                            },
-                            modifier = Modifier.fillMaxWidth(),
-                            shape = RoundedCornerShape(12.dp)
-                        ) {
-                            Icon(Icons.Filled.Save, contentDescription = null, modifier = Modifier.size(18.dp))
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text("Save Encrypted Supabase Config")
+                        if (canViewSupabaseGuide) {
+                            PlatformGuideTriggerButton(
+                                onClick = { showSupabaseGuide = true }
+                            )
                         }
                     }
+
+                    Text(
+                        text = if (session.isConfigured) {
+                            "Project connection is bundled with this build. Public API key configuration is managed by the app release."
+                        } else {
+                            "Supabase is not configured in this build. The project URL and anon key must be supplied at build time."
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = colorScheme.onSurfaceVariant
+                    )
                 }
             }
 
@@ -527,7 +500,7 @@ fun CloudAccountScreen(
         }
     }
 
-    if (showSupabaseGuide) {
+    if (showSupabaseGuide && canViewSupabaseGuide) {
         PlatformGuideBottomSheet(
             guideId = PlatformGuideId.SUPABASE_CLOUD,
             onDismiss = { showSupabaseGuide = false },
@@ -616,7 +589,7 @@ private fun TeamMemberRoleRow(
                         expanded = roleMenuExpanded,
                         onDismissRequest = { roleMenuExpanded = false }
                     ) {
-                        listOf("OWNER", "EDITOR", "VIEWER", "PENDING").forEach { option ->
+                        listOf("EDITOR", "VIEWER", "PENDING").forEach { option ->
                             DropdownMenuItem(
                                 text = { Text(option) },
                                 onClick = {

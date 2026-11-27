@@ -303,6 +303,12 @@ class CloudSyncRepository(
     val syncStatus: StateFlow<CloudSyncStatus> = _syncStatus.asStateFlow()
 
     suspend fun pushUserApiCredentials(): Result<Unit> = withContext(Dispatchers.IO) {
+        authManager.refreshProfileStatus().getOrElse { return@withContext Result.failure(it) }
+        if (!roleGuard.currentCapabilities.canWriteVault) {
+            return@withContext Result.failure(
+                IllegalStateException(roleGuard.denyReasonForVaultWrite() ?: "Owner role required.")
+            )
+        }
         val accessToken = authManager.ensureValidAccessToken().getOrElse {
             return@withContext Result.failure(it)
         }
@@ -340,6 +346,12 @@ class CloudSyncRepository(
     }
 
     suspend fun pullUserApiCredentials(): Result<UserApiCredentials?> = withContext(Dispatchers.IO) {
+        authManager.refreshProfileStatus().getOrElse { return@withContext Result.failure(it) }
+        if (!roleGuard.currentCapabilities.canWriteVault) {
+            return@withContext Result.failure(
+                IllegalStateException(roleGuard.denyReasonForVaultWrite() ?: "Owner role required.")
+            )
+        }
         val accessToken = authManager.ensureValidAccessToken().getOrElse {
             return@withContext Result.failure(it)
         }
@@ -373,15 +385,17 @@ class CloudSyncRepository(
     }
 
     suspend fun syncNow(onProgress: ((String) -> Unit)? = null): Result<CloudSyncSummary> = withContext(Dispatchers.IO) {
-        val caps = roleGuard.currentCapabilities
-        if (caps.isOfflineLocal) {
+        if (roleGuard.currentCapabilities.isOfflineLocal) {
             return@withContext Result.failure(IllegalStateException("App is in Offline Local Mode. Sign in with Google to sync."))
         }
 
-        if (caps.isPendingApproval) {
+        val verifiedSession = authManager.refreshProfileStatus().getOrElse {
+            return@withContext Result.failure(it)
+        }
+        val caps = roleGuard.currentCapabilities
+        if (!verifiedSession.isApproved || caps.isPendingApproval) {
             return@withContext Result.failure(IllegalStateException("Account is awaiting Owner approval before syncing."))
         }
-
         _syncStatus.value = _syncStatus.value.copy(isSyncing = true, lastMessage = "Authenticating & compressing deltas...")
         try {
             val pushStats = if (caps.canEditContent) {
@@ -436,7 +450,13 @@ class CloudSyncRepository(
     }
 
     suspend fun pushLocalChanges(onProgress: ((String) -> Unit)? = null): Result<CloudSyncPushStats> = withContext(Dispatchers.IO) {
+        val verifiedSession = authManager.refreshProfileStatus().getOrElse {
+            return@withContext Result.failure(it)
+        }
         val caps = roleGuard.currentCapabilities
+        if (!verifiedSession.isApproved || caps.isPendingApproval) {
+            return@withContext Result.failure(IllegalStateException("Account is awaiting Owner approval before pushing changes."))
+        }
         if (!caps.canEditContent) {
             return@withContext Result.failure(IllegalStateException("Read-Only (Viewer Role) cannot push changes."))
         }
@@ -841,6 +861,12 @@ class CloudSyncRepository(
     }
 
     suspend fun pullRemoteChanges(onProgress: ((String) -> Unit)? = null): Result<CloudSyncPullStats> = withContext(Dispatchers.IO) {
+        val verifiedSession = authManager.refreshProfileStatus().getOrElse {
+            return@withContext Result.failure(it)
+        }
+        if (!verifiedSession.isApproved || !roleGuard.currentCapabilities.canReadContent) {
+            return@withContext Result.failure(IllegalStateException("Account is not approved to read cloud data."))
+        }
         val token = authManager.ensureValidAccessToken().getOrElse { return@withContext Result.failure(it) }
         val baseUrl = authManager.normalizedBaseUrl()
         val anonKey = vault.supabaseAnonKey.trim()

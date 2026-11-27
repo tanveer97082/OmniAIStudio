@@ -88,6 +88,7 @@ import androidx.fragment.app.FragmentActivity
 import com.omniai.studio.BuildConfig
 import com.omniai.studio.data.local.AppSettingsRepository
 import com.omniai.studio.data.local.AutoTypeSpeedMode
+import com.omniai.studio.cloud.CloudUserRole
 import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.ErrorOutline
 import com.omniai.studio.media.AdobeAppPickerDialog
@@ -364,9 +365,11 @@ fun SettingsHubScreen(
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
-                            PlatformGuideTriggerButton(
-                                onClick = { activeGuideId = PlatformGuideId.SUPABASE_CLOUD }
-                            )
+                            if (BuildConfig.DEBUG || cloudRole == CloudUserRole.OWNER) {
+                                PlatformGuideTriggerButton(
+                                    onClick = { activeGuideId = PlatformGuideId.SUPABASE_CLOUD }
+                                )
+                            }
                         }
                         Button(
                             onClick = onOpenCloudAccount,
@@ -1757,7 +1760,9 @@ fun SettingsHubScreen(
         )
     }
 
-    activeGuideId?.let { guideId ->
+    activeGuideId?.takeIf {
+        it != PlatformGuideId.SUPABASE_CLOUD || BuildConfig.DEBUG || cloudRole == CloudUserRole.OWNER
+    }?.let { guideId ->
         PlatformGuideBottomSheet(
             guideId = guideId,
             onDismiss = { activeGuideId = null },

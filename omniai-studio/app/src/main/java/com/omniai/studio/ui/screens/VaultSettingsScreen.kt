@@ -76,6 +76,7 @@ import com.omniai.studio.security.BiometricAuthManager
 import com.omniai.studio.security.VaultManager
 import com.omniai.studio.data.remote.CompatibleAiProviderConfig
 import com.omniai.studio.data.remote.PlatformApiCredential
+import com.omniai.studio.cloud.CloudUserRole
 import com.omniai.studio.ui.guides.PlatformGuideBottomSheet
 import com.omniai.studio.ui.guides.PlatformGuideId
 import com.omniai.studio.ui.guides.PlatformGuideTriggerButton
@@ -272,51 +273,30 @@ fun VaultSettingsScreen(
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
-                        PlatformGuideTriggerButton(
-                            onClick = { activeGuideId = PlatformGuideId.SUPABASE_CLOUD }
-                        )
+                        if (BuildConfig.DEBUG || cloudRole == CloudUserRole.OWNER) {
+                            PlatformGuideTriggerButton(
+                                onClick = { activeGuideId = PlatformGuideId.SUPABASE_CLOUD }
+                            )
+                        }
                     }
 
-                    OutlinedTextField(
-                        value = draft.supabaseUrl,
-                        onValueChange = { draft = draft.copy(supabaseUrl = it) },
-                        label = { Text("SUPABASE_URL (https://<project-ref>.supabase.co)") },
-                        singleLine = true,
-                        enabled = roleCapabilities.canWriteVault,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-
-                    SecretVaultField(
-                        label = "SUPABASE_ANON_KEY (Public Anon Key)",
-                        value = draft.supabaseAnonKey,
-                        unlocked = secretsUnlocked && roleCapabilities.canWriteVault,
-                        onValueChange = { draft = draft.copy(supabaseAnonKey = it) },
-                        onCopy = {
-                            requireBiometricThen("Authenticate to copy SUPABASE_ANON_KEY") {
-                                clipboard.setText(AnnotatedString(draft.supabaseAnonKey))
-                                viewModel.postToast("Copied SUPABASE_ANON_KEY.")
-                            }
-                        }
+                    Text(
+                        text = if (cloudSession.isConfigured) {
+                            "Supabase project credentials are bundled into this app build and are not editable in the vault."
+                        } else {
+                            "Supabase credentials are not configured in this build."
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
 
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Button(
-                            onClick = {
-                                viewModel.saveSupabaseConfig(draft.supabaseUrl, draft.supabaseAnonKey)
-                            },
-                            enabled = roleCapabilities.canWriteVault,
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Icon(Icons.Filled.Save, contentDescription = null)
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(if (roleCapabilities.canWriteVault) "Save Supabase" else "Owner Only")
-                        }
                         OutlinedButton(
                             onClick = onOpenCloudAccount,
-                            modifier = Modifier.weight(1f)
+                            modifier = Modifier.fillMaxWidth()
                         ) {
                             Icon(Icons.Filled.AdminPanelSettings, contentDescription = null)
                             Spacer(modifier = Modifier.width(6.dp))
@@ -1599,7 +1579,9 @@ fun VaultSettingsScreen(
         )
     }
 
-    activeGuideId?.let { guideId ->
+    activeGuideId?.takeIf {
+        it != PlatformGuideId.SUPABASE_CLOUD || BuildConfig.DEBUG || cloudRole == CloudUserRole.OWNER
+    }?.let { guideId ->
         PlatformGuideBottomSheet(
             guideId = guideId,
             onDismiss = { activeGuideId = null },

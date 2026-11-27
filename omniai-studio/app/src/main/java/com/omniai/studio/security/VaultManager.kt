@@ -5,6 +5,7 @@ import android.content.SharedPreferences
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import com.omniai.studio.cloud.UserApiCredentials
+import com.omniai.studio.BuildConfig
 import com.omniai.studio.data.remote.CompatibleAiProviderConfig
 import com.omniai.studio.data.remote.KaggleAccountCredential
 import com.omniai.studio.data.remote.PlatformApiCredential
@@ -40,6 +41,13 @@ class VaultManager(context: Context) {
         EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
         EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
     )
+
+    init {
+        prefs.edit()
+            .remove("SUPABASE_URL")
+            .remove("SUPABASE_ANON_KEY")
+            .apply()
+    }
 
     var primaryTunnelUrl: String
         get() = prefs.getString(KEY_PRIMARY_URL, "") ?: ""
@@ -195,14 +203,11 @@ class VaultManager(context: Context) {
         get() = prefs.getString(KEY_META_PAGE_TOKEN, "") ?: ""
         set(value) = prefs.edit().putString(KEY_META_PAGE_TOKEN, value.trim()).apply()
 
-    // v5.5 Supabase PostgreSQL Cloud DB, Google OAuth PKCE & Delta Sync (AES-256-GCM Encrypted)
-    var supabaseUrl: String
-        get() = prefs.getString(KEY_SUPABASE_URL, "") ?: ""
-        set(value) = prefs.edit().putString(KEY_SUPABASE_URL, value.trim().trimEnd('/')).apply()
+    val supabaseUrl: String
+        get() = BuildConfig.SUPABASE_URL.trim().trimEnd('/')
 
-    var supabaseAnonKey: String
-        get() = prefs.getString(KEY_SUPABASE_ANON_KEY, "") ?: ""
-        set(value) = prefs.edit().putString(KEY_SUPABASE_ANON_KEY, value.trim()).apply()
+    val supabaseAnonKey: String
+        get() = BuildConfig.SUPABASE_ANON_KEY.trim()
 
     var cloudAccessToken: String
         get() = prefs.getString(KEY_CLOUD_ACCESS_TOKEN, "") ?: ""
@@ -468,8 +473,8 @@ class VaultManager(context: Context) {
         metaPageId = metaPageId,
         metaIgUserId = metaIgUserId,
         metaPageAccessToken = metaPageAccessToken,
-        supabaseUrl = supabaseUrl,
-        supabaseAnonKey = supabaseAnonKey,
+        supabaseUrl = "",
+        supabaseAnonKey = "",
         appLockEnabled = appLockEnabled,
         vaultLockEnabled = vaultLockEnabled,
         flagSecureEnabled = flagSecureEnabled,
@@ -577,8 +582,6 @@ class VaultManager(context: Context) {
             .putString(KEY_META_PAGE_ID, snapshot.metaPageId)
             .putString(KEY_META_IG_USER_ID, snapshot.metaIgUserId)
             .putString(KEY_META_PAGE_TOKEN, snapshot.metaPageAccessToken)
-            .putString(KEY_SUPABASE_URL, snapshot.supabaseUrl.trim().trimEnd('/'))
-            .putString(KEY_SUPABASE_ANON_KEY, snapshot.supabaseAnonKey.trim())
             .putBoolean(KEY_APP_LOCK, snapshot.appLockEnabled)
             .putBoolean(KEY_VAULT_LOCK, snapshot.vaultLockEnabled)
             .putBoolean(KEY_FLAG_SECURE, snapshot.flagSecureEnabled)
@@ -637,8 +640,6 @@ class VaultManager(context: Context) {
         private const val KEY_META_PAGE_ID = "v53_meta_page_id"
         private const val KEY_META_IG_USER_ID = "v53_meta_ig_user_id"
         private const val KEY_META_PAGE_TOKEN = "v53_meta_page_access_token"
-        private const val KEY_SUPABASE_URL = "SUPABASE_URL"
-        private const val KEY_SUPABASE_ANON_KEY = "SUPABASE_ANON_KEY"
         private const val KEY_CLOUD_ACCESS_TOKEN = "CLOUD_ACCESS_TOKEN"
         private const val KEY_CLOUD_REFRESH_TOKEN = "CLOUD_REFRESH_TOKEN"
         private const val KEY_CLOUD_TOKEN_EXPIRES_AT = "CLOUD_TOKEN_EXPIRES_AT"

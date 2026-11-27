@@ -12,7 +12,8 @@ import com.omniai.studio.backup.GitHubBackupSync
 import com.omniai.studio.backup.VaultBackupManager
 import com.omniai.studio.cloud.CloudSyncRepository
 import com.omniai.studio.cloud.SupabaseAuthManager
-import com.omniai.studio.cloud.UserApiCredentialsSchema
+import com.omniai.studio.cloud.CloudUserRole
+import com.omniai.studio.cloud.SupabaseSchemaScript
 import com.omniai.studio.data.local.AppSettingsRepository
 import com.omniai.studio.data.local.ContentDbExporter
 import com.omniai.studio.data.local.OmniAiDatabase
@@ -222,9 +223,16 @@ class OmniCliInterpreter(
                 return OmniCliOutcome.HANDLED
             }
             lower == "supabase schema" -> {
+                if (!BuildConfig.DEBUG && supabaseAuthManager.sessionState.value.role != CloudUserRole.OWNER) {
+                    onLine("Owner Only — schema setup commands are available only to OWNER accounts.", TerminalLineType.STDERR)
+                    return OmniCliOutcome.HANDLED
+                }
                 onLine("Run this once in Supabase Dashboard > SQL Editor. DDL cannot be run through the app's public API.", TerminalLineType.SYSTEM)
-                UserApiCredentialsSchema.SQL.trimIndent().lines().forEach { onLine(it, TerminalLineType.STDOUT) }
-                onLine("RLS permits each signed-in account to access only its own row. Supabase project administrators remain privileged.", TerminalLineType.SYSTEM)
+                try {
+                    SupabaseSchemaScript.load(context).lines().forEach { onLine(it, TerminalLineType.STDOUT) }
+                } catch (ex: Exception) {
+                    onLine("Unable to load bundled Supabase schema: ${ex.message}", TerminalLineType.STDERR)
+                }
                 return OmniCliOutcome.HANDLED
             }
             lower == "supabase keys push" -> {
@@ -336,7 +344,7 @@ class OmniCliInterpreter(
         onLine("  cloud status         Show Google OAuth email, active RBAC role, last sync & GZIP savings", TerminalLineType.STDOUT)
         onLine("  cloud sync           Run two-way GZIP-compressed text delta sync with Supabase", TerminalLineType.STDOUT)
         onLine("  cloud users          (OWNER only) List registered accounts, devices & RBAC roles", TerminalLineType.STDOUT)
-        onLine("  supabase schema      Print the private API-credentials table + per-user RLS SQL", TerminalLineType.STDOUT)
+        onLine("  supabase schema      Print complete profiles, signup trigger, sync tables & strict RLS setup SQL", TerminalLineType.STDOUT)
         onLine("  supabase keys push   Save configured API credentials to your signed-in account", TerminalLineType.STDOUT)
         onLine("  supabase keys pull   Restore API credentials from your signed-in account", TerminalLineType.STDOUT)
         onLine("  supabase status      Show Supabase configuration and signed-in status", TerminalLineType.STDOUT)

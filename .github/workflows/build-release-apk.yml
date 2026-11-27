@@ -4,9 +4,6 @@ on:
   push:
     branches:
       - main
-    paths-ignore:
-      - 'kaggle_worker/**'
-      - 'README.md'
   workflow_dispatch:
 
 permissions:
@@ -46,73 +43,65 @@ jobs:
           KEY_PASS: ${{ secrets.KEY_PASS }}
         run: |
           if [[ -n "$KEYSTORE_BASE64" && -n "$KEYSTORE_PASS" && -n "$KEY_ALIAS" && -n "$KEY_PASS" ]]; then
-            echo "$KEYSTORE_BASE64" | base64 --decode > app/release-keystore.jks
+            printf '%s' "$KEYSTORE_BASE64" | base64 --decode > app/release-keystore.jks
             echo "signed=true" >> "$GITHUB_OUTPUT"
             echo "Release keystore decoded successfully. Building signed release APK."
           else
             echo "signed=false" >> "$GITHUB_OUTPUT"
-            echo "Release signing secrets not configured. Falling back to assembleDebug."
+            echo "Release signing secrets not configured. Building an unsigned Release APK and a Debug APK."
           fi
 
-      - name: Build Signed Release APK
-        if: steps.signing.outputs.signed == 'true'
+      - name: Build Debug and Release APKs
         working-directory: ./omniai-studio
         env:
-          KEYSTORE_PATH: app/release-keystore.jks
+          KEYSTORE_PATH: ${{ steps.signing.outputs.signed == 'true' && 'release-keystore.jks' || '' }}
           KEYSTORE_PASS: ${{ secrets.KEYSTORE_PASS }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASS: ${{ secrets.KEY_PASS }}
+          SUPABASE_URL: https://sdsdsxqcujkuozuomqwt.supabase.co
+          SUPABASE_ANON_KEY: sb_publishable_2PEC-jz7RNS_2junHMYRZQ_QPWfauyn
         run: |
           chmod +x ./gradlew
-          ./gradlew assembleRelease \
+          ./gradlew assembleDebug assembleRelease \
             -PVERSION_CODE=${VERSION_CODE} \
             -PVERSION_NAME=${VERSION_NAME} \
             --no-daemon --stacktrace
 
-      - name: Build Debug APK (Fallback)
-        if: steps.signing.outputs.signed != 'true'
-        working-directory: ./omniai-studio
+      - name: Stage Debug and Release APKs
         run: |
-          chmod +x ./gradlew
-          ./gradlew assembleDebug \
-            -PVERSION_CODE=${VERSION_CODE} \
-            -PVERSION_NAME=${VERSION_NAME} \
-            --no-daemon --stacktrace
-
-      - name: Stage APK for Checksum and Release
-        env:
-          APK_VARIANT: ${{ steps.signing.outputs.signed == 'true' && 'release' || 'debug' }}
-        run: |
-          if [[ "$APK_VARIANT" == "release" ]]; then
-            apk_source="omniai-studio/app/build/outputs/apk/release/app-release.apk"
+          debug_source="omniai-studio/app/build/outputs/apk/debug/app-debug.apk"
+          release_dir="omniai-studio/app/build/outputs/apk/release"
+          if [[ -f "$release_dir/app-release.apk" ]]; then
+            release_source="$release_dir/app-release.apk"
+          elif [[ -f "$release_dir/app-release-unsigned.apk" ]]; then
+            release_source="$release_dir/app-release-unsigned.apk"
           else
-            apk_source="omniai-studio/app/build/outputs/apk/debug/app-debug.apk"
-          fi
-          apk_target="OmniAI-Studio-v${VERSION_NAME}.apk"
-          if [[ ! -f "$apk_source" ]]; then
-            echo "::error::APK was not produced at expected path: $apk_source"
+            echo "::error::Release APK was not produced in $release_dir"
             exit 1
           fi
-          cp "$apk_source" "$apk_target"
-          echo "Staged APK: $apk_source -> $apk_target"
+          if [[ ! -f "$debug_source" ]]; then
+            echo "::error::Debug APK was not produced at $debug_source"
+            exit 1
+          fi
+          cp "$debug_source" "OmniAI-Studio-v${VERSION_NAME}-debug.apk"
+          cp "$release_source" "OmniAI-Studio-v${VERSION_NAME}-release.apk"
 
       - name: Compute APK SHA-256 Checksum
         run: |
-          apk_file="OmniAI-Studio-v${VERSION_NAME}.apk"
-          if [[ ! -f "$apk_file" ]]; then
-            echo "::error::Cannot compute SHA-256: APK file '$apk_file' does not exist."
-            exit 1
-          fi
-          sha256sum "$apk_file" > "$apk_file.sha256"
-          cat "$apk_file.sha256"
+          sha256sum \
+            "OmniAI-Studio-v${VERSION_NAME}-debug.apk" \
+            "OmniAI-Studio-v${VERSION_NAME}-release.apk" \
+            > "OmniAI-Studio-v${VERSION_NAME}.sha256"
+          cat "OmniAI-Studio-v${VERSION_NAME}.sha256"
 
       - name: Upload APK Build Artifact
         uses: actions/upload-artifact@v4
         with:
           name: OmniAI-Studio-v${{ env.VERSION_NAME }}
           path: |
-            OmniAI-Studio-v${{ env.VERSION_NAME }}.apk
-            OmniAI-Studio-v${{ env.VERSION_NAME }}.apk.sha256
+            OmniAI-Studio-v${{ env.VERSION_NAME }}-debug.apk
+            OmniAI-Studio-v${{ env.VERSION_NAME }}-release.apk
+            OmniAI-Studio-v${{ env.VERSION_NAME }}.sha256
           retention-days: 30
 
       - name: Publish GitHub Release
@@ -126,7 +115,7 @@ jobs:
           body: |
             Automated build for **OmniAI-Studio v${{ env.VERSION_NAME }}** (versionCode `${{ env.VERSION_CODE }}`).
 
-            - Build Variant: `${{ steps.signing.outputs.signed == 'true' && 'Signed Release' || 'Debug Fallback' }}`
+            - Build Variants: Debug APK and ${{ steps.signing.outputs.signed == 'true' && 'signed Release APK' || 'unsigned Release APK' }}
             - Compile / Target SDK: Android 14 (API 34), Min SDK: API 26
             - On-Device Video Engine: AndroidX Media3 Transformer 1.2.1 + Kaggle Wan 2.1 Seamless Loop
             - v5.5 Cloud DB & RBAC: Pure OkHttp3 Supabase PostgreSQL GZIP Text-Only Delta Sync, Google OAuth 2.0 PKCE + Server-Enforced RLS Roles (`OWNER`/`EDITOR`/`VIEWER`/`PENDING`), Multi-Device Sync & Anti-Pause Cron
@@ -138,5 +127,6 @@ jobs:
             - v4.5 Engine: Project Management System (Kanban + Code Editor + AI ### FILE Splitter), Zero-Dependency Atomic GitHub Git Data API Push/Pull, Live GitHub Actions Build Monitor & 1-Tap OTA APK Installer
             - Security: AES-256-GCM Vault, BiometricPrompt, FLAG_SECURE, PBKDF2 Encrypted Backups (Room DB v10)
           files: |
-            OmniAI-Studio-v${{ env.VERSION_NAME }}.apk
-            OmniAI-Studio-v${{ env.VERSION_NAME }}.apk.sha256
+            OmniAI-Studio-v${{ env.VERSION_NAME }}-debug.apk
+            OmniAI-Studio-v${{ env.VERSION_NAME }}-release.apk
+            OmniAI-Studio-v${{ env.VERSION_NAME }}.sha256

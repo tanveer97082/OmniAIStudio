@@ -434,17 +434,17 @@ curl -sS "https://<project-ref>.supabase.co/rest/v1/user_profiles?select=count" 
             title = "Supabase PostgreSQL Cloud DB, Google PKCE & RBAC",
             badge = "GZIP Text Sync",
             summary = "Sync Chats, Video Scripts, Social SEO, Niches, Projects, Tasks & AI Memory across devices using GZIP-compressed text rows (<=256 KB) with Google OAuth PKCE and server-enforced PostgreSQL RLS.",
-            faqNote = "First-User Owner Rule: The very first Google account to sign in automatically becomes OWNER (is_approved = true). Every additional user defaults to PENDING until the OWNER approves them and assigns EDITOR or VIEWER inside Cloud DB & Roles. Zero binary videos or images are ever uploaded to Supabase.",
+            faqNote = "First-Owner Rule: The first Google account to create a profile while no OWNER exists becomes OWNER (is_approved = true). Every subsequent account defaults to PENDING until an OWNER approves it and assigns EDITOR or VIEWER inside Cloud DB & Roles. Zero binary videos or images are ever uploaded to Supabase.",
             portals = listOf(
                 GuidePortalLink("Open Supabase Dashboard", "https://supabase.com/dashboard"),
                 GuidePortalLink("Open Google Cloud OAuth Credentials", "https://console.cloud.google.com/apis/credentials")
             ),
             steps = listOf(
-                "Create a free Supabase project, open SQL Editor, paste the complete contents of supabase/schema_and_rls.sql from this repository, and click Run.",
-                "Go to Project Settings -> API, copy your Project URL (SUPABASE_URL) and anon public key (SUPABASE_ANON_KEY), and paste both into OmniAI Studio.",
+                "Create a free Supabase project, open SQL Editor, paste the complete contents of supabase/schema_and_rls.sql from this repository (or run 'supabase schema' in an OWNER/debug app), and click Run.",
+                "Go to Project Settings -> API and add the Project URL and anon public key to omniai-studio/local.properties as SUPABASE_URL and SUPABASE_ANON_KEY, then rebuild the app. For GitHub Actions builds, add them as repository Actions secrets with those same names.",
                 "In Supabase Authentication -> URL Configuration, add the mobile deep-link Redirect URL: omniaistudio://auth-callback",
                 "In Supabase Authentication -> Providers -> Google, enable Google using a Google Cloud Web OAuth Client ID & Secret whose Authorized redirect URI is https://<project-ref>.supabase.co/auth/v1/callback.",
-                "Add SUPABASE_URL and SUPABASE_ANON_KEY to your GitHub Repo -> Settings -> Secrets and variables -> Actions so .github/workflows/keep-supabase-alive.yml pings every 4 days and prevents free-tier pausing."
+                "Add SUPABASE_URL and SUPABASE_ANON_KEY to your GitHub Repo -> Settings -> Secrets and variables -> Actions so Android builds bundle the project connection and .github/workflows/keep-supabase-alive.yml can ping every 4 days."
             ),
             commands = listOf(
                 GuideCommandBlock(

@@ -956,6 +956,18 @@ class OmniAiViewModel(application: Application) : AndroidViewModel(application) 
                 appendTerminalLine(entry.toTerminalLine(), TerminalLineType.NETLOG)
             }
         }
+        if (supabaseAuthManager.sessionState.value.isSignedIn) {
+            viewModelScope.launch(Dispatchers.IO) {
+                _isRefreshingCloudStatus.value = true
+                try {
+                    supabaseAuthManager.refreshProfileStatus().onFailure { ex ->
+                        postToast(ex.message ?: "Could not verify cloud approval status.")
+                    }
+                } finally {
+                    _isRefreshingCloudStatus.value = false
+                }
+            }
+        }
     }
 
     private suspend fun seedDefaultHashtagPacksIfEmpty() {
@@ -5904,23 +5916,6 @@ class OmniAiViewModel(application: Application) : AndroidViewModel(application) 
     // =========================================================================
     // v5.5 SUPABASE POSTGRESQL COMPRESSED CLOUD DB, GOOGLE OAUTH PKCE & RBAC
     // =========================================================================
-
-    fun saveSupabaseConfig(url: String, anonKey: String) {
-        rolePermissionGuard.denyReasonForVaultWrite()?.let { deny ->
-            postToast(deny)
-            return
-        }
-        val cleanUrl = url.trim().trimEnd('/')
-        if (cleanUrl.isNotBlank() && !cleanUrl.startsWith("https://")) {
-            postToast("SUPABASE_URL must start with https://")
-            return
-        }
-        vault.supabaseUrl = cleanUrl
-        vault.supabaseAnonKey = anonKey.trim()
-        _vaultSnapshot.value = vault.exportSnapshot()
-        supabaseAuthManager.refreshLocalSessionSnapshot()
-        postToast("Saved encrypted Supabase PostgreSQL config.")
-    }
 
     fun startGoogleCloudSignIn(context: Context) {
         supabaseAuthManager.startGoogleSignIn(context).fold(

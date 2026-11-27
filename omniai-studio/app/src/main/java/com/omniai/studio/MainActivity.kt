@@ -55,6 +55,7 @@ import com.omniai.studio.ui.screens.AppLockOverlay
 import com.omniai.studio.ui.screens.BackupSyncCenterScreen
 import com.omniai.studio.ui.screens.ChainRunnerScreen
 import com.omniai.studio.ui.screens.ChatStudioScreen
+import com.omniai.studio.ui.screens.CloudLoginScreen
 import com.omniai.studio.ui.screens.CloudAccountScreen
 import com.omniai.studio.ui.screens.CommandPaletteDialog
 import com.omniai.studio.ui.screens.ContentHubScreen
@@ -138,6 +139,7 @@ class MainActivity : FragmentActivity() {
 
                 // "NONE" | "SETTINGS_HUB" | "THEME_STUDIO" | "BACKUP_CENTER" | "ANALYTICS" | "CHAIN_RUNNER"
                 var activeOverlay by rememberSaveable { mutableStateOf("NONE") }
+                var continuedOffline by rememberSaveable { mutableStateOf(false) }
                 var showCommandPalette by remember { mutableStateOf(false) }
                 var showCreateWorkspaceDialog by remember { mutableStateOf(false) }
                 var newWorkspaceName by remember { mutableStateOf("") }
@@ -232,7 +234,16 @@ class MainActivity : FragmentActivity() {
                 }
 
                 Box(modifier = Modifier.fillMaxSize()) {
-                    if (appSettings.initialSetupComplete) {
+                    if (!cloudSession.isSignedIn && !continuedOffline) {
+                        CloudLoginScreen(
+                            viewModel = viewModel,
+                            isSigningIn = isRefreshingCloudStatus,
+                            onContinueOffline = {
+                                continuedOffline = true
+                                viewModel.enableOfflineLocalMode()
+                            }
+                        )
+                    } else if (appSettings.initialSetupComplete) {
                         // Hub-and-Spoke Navigation Shell (4-Tab Bar + Slide-Out Drawer + Slim 56dp TopAppBar)
                         AppNavigationShell(
                         viewModel = viewModel,
@@ -548,7 +559,10 @@ class MainActivity : FragmentActivity() {
                             deviceName = cloudSession.deviceName,
                             isRefreshing = isRefreshingCloudStatus,
                             onRefreshStatus = { viewModel.refreshCloudApprovalStatus() },
-                            onUseOfflineLocal = { viewModel.enableOfflineLocalMode() },
+                            onUseOfflineLocal = {
+                                continuedOffline = true
+                                viewModel.enableOfflineLocalMode()
+                            },
                             onSignOut = { viewModel.signOutCloud() }
                         )
                     }

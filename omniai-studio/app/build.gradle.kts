@@ -5,12 +5,32 @@ plugins {
     id("com.google.devtools.ksp")
 }
 
+val localProperties = java.util.Properties().apply {
+    rootProject.file("local.properties").takeIf { it.isFile }?.inputStream()?.use { load(it) }
+}
+
+fun buildConfigString(value: String): String =
+    "\"${value.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n")}\""
+
+val supabaseUrl = localProperties.getProperty("SUPABASE_URL")?.takeIf { it.isNotBlank() }
+    ?: System.getenv("SUPABASE_URL")
+        ?.takeIf { it.isNotBlank() }
+    ?: ""
+val supabaseAnonKey = localProperties.getProperty("SUPABASE_ANON_KEY")?.takeIf { it.isNotBlank() }
+    ?: System.getenv("SUPABASE_ANON_KEY")
+        ?.takeIf { it.isNotBlank() }
+    ?: ""
+
 val buildVersionCode: Int = (project.findProperty("VERSION_CODE") as? String)?.toIntOrNull() ?: 1
 val buildVersionName: String = (project.findProperty("VERSION_NAME") as? String) ?: "5.5.1"
 
 android {
     namespace = "com.omniai.studio"
     compileSdk = 34
+
+    sourceSets {
+        getByName("main").assets.srcDir(rootProject.file("supabase"))
+    }
 
     defaultConfig {
         applicationId = "com.omniai.studio"
@@ -20,6 +40,8 @@ android {
         versionName = buildVersionName
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        buildConfigField("String", "SUPABASE_URL", buildConfigString(supabaseUrl))
+        buildConfigField("String", "SUPABASE_ANON_KEY", buildConfigString(supabaseAnonKey))
         vectorDrawables {
             useSupportLibrary = true
         }

@@ -38,9 +38,11 @@ as $$
 $$;
 
 create or replace function public.is_approved_user()
-returns boolean
+returns booleanpython3 -c "with open('omniai-studio/supabase/schema_and_rls.sql') as f: text = f.read(); print('=== TABLES ==='); print('\n'.join(re.findall(r'create table[^\;]+\;', text, re.I))); print('=== FUNCTIONS ==='); print('\n---\n'.join(re.findall(r'create (?:or replace )?function[^\$]+\$\$.*?\$\$;', text, re.I | re.S))); print('=== TRIGGERS ==='); print('\n'.join(re.findall(r'create trigger[^\;]+\;', text, re.I))); print('=== POLICIES ==='); print('\n'.join(re.findall(r'create policy[^\;]+\;', text, re.I)))" > /tmp/parsed.txt
+cat /tmp/parsed.txt
+
 language sql
-stable
+stablepython3 -c "with open('omniai-studio/supabase/schema_and_rls.sql') as f: text = f.read(); import re; print('=== TABLES ==='); [print(m.group(0)[:150]) for m in re.finditer(r'create table[^\(]+\([^\;]+\);', text, re.I)]; print('=== FUNCTIONS ==='); [print(fn.group(0)) for fn in re.finditer(r'create (?:or replace )?function [^\(]+\(', text, re.I)]; print('=== TRIGGERS ==='); [print(tr.group(0)) for tr in re.finditer(r'create trigger [^\n]+', text, re.I)]; print('=== POLICIES ==='); [print(p.group(0)) for p in re.finditer(r'create policy [^\n]+', text, re.I)]"
 security definer
 set search_path = public
 as $$
@@ -50,11 +52,88 @@ as $$
     );
 $$;
 
+create or replace function public.ensure_user_profile()
+returns setof public.user_profiles
+language plpgsql
+security definer
+set search_path = public, auth
+as $$
+declare
+    caller_id uuid := auth.uid();
+    has_owner boolean;
+    auth_user auth.users%rowtype;
+    resolved_role text;
+    resolved_approved boolean;
+begin
+    if caller_id is null then
+        raise exception 'Authentication required' using errcode = '28000';
+    end if;
+
+    if exists (select 1 from public.user_profiles where id = caller_id) then
+        return query
+        select up.*
+        from public.user_profiles up
+        where up.id = caller_id;
+        return;
+    end if;
+
+    perform pg_advisory_xact_lock(78550192341);
+
+    if not exists (select 1 from public.user_profiles where id = caller_id) then
+        select u.* into auth_user
+        from auth.users u
+        where u.id = caller_id;
+
+        if not found then
+            raise exception 'Authenticated user not found' using errcode = '28000';
+        end if;
+
+        select exists (
+            select 1 from public.user_profiles where role = 'OWNER'
+        ) into has_owner;
+
+        if has_owner then
+            resolved_role := 'PENDING';
+            resolved_approved := false;
+        else
+            resolved_role := 'OWNER';
+            resolved_approved := true;
+        end if;
+
+        insert into public.user_profiles (
+            id, email, display_name, role, is_approved, last_device, last_seen_at
+        )
+        values (
+            auth_user.id,
+            coalesce(auth_user.email, auth_user.id::text || '@unknown.local'),
+            coalesce(
+                nullif(auth_user.raw_user_meta_data ->> 'full_name', ''),
+                nullif(auth_user.raw_user_meta_data ->> 'name', ''),
+                split_part(coalesce(auth_user.email, 'user'), '@', 1)
+            ),
+            resolved_role,
+            resolved_approved,
+            null,
+            now()
+        )
+        on conflict (id) do nothing;
+    end if;
+
+    return query
+    select up.*
+    from public.user_profiles up
+    where up.id = caller_id;
+end;
+$$;
+
 revoke all on function public.get_my_role() from public;
 grant execute on function public.get_my_role() to authenticated;
 
 revoke all on function public.is_approved_user() from public;
 grant execute on function public.is_approved_user() to authenticated;
+
+revoke all on function public.ensure_user_profile() from public;
+grant execute on function public.ensure_user_profile() to authenticated;
 
 -- 3. AUTOMATIC FIRST-USER OWNER BOOTSTRAP TRIGGER
 -- First account ever registered becomes OWNER + is_approved = true.
@@ -66,7 +145,7 @@ security definer
 set search_path = public
 as $$
 declare
-    existing_count bigint;
+    owner_exists boolean;
     assigned_role text;
     assigned_approved boolean;
     resolved_name text;
@@ -74,9 +153,11 @@ begin
     -- Serialize first-owner election across concurrent signups
     perform pg_advisory_xact_lock(78550192341);
 
-    select count(*) into existing_count from public.user_profiles;
+    select exists (
+        select 1 from public.user_profiles where role = 'OWNER'
+    ) into owner_exists;
 
-    if existing_count = 0 then
+    if not owner_exists then
         assigned_role := 'OWNER';
         assigned_approved := true;
     else
@@ -128,16 +209,28 @@ security definer
 set search_path = public
 as $$
 begin
-    if current_user in ('postgres', 'supabase_admin', 'service_role') then
-        return new;
+    if new.role = 'OWNER' and old.role <> 'OWNER' then
+        raise exception 'Permission denied: OWNER is assigned only by the first-owner bootstrap'
+            using errcode = '42501';
     end if;
 
-    if public.get_my_role() <> 'OWNER' then
+    if auth.uid() = old.id
+       and (
+           new.role is distinct from old.role
+           or new.is_approved is distinct from old.is_approved
+       ) then
+        raise exception 'Permission denied: users cannot change their own role or approval status'
+            using errcode = '42501';
+    end if;
+
+    if public.get_my_role() <> 'OWNER' or not public.is_approved_user() then
         if new.role is distinct from old.role
            or new.is_approved is distinct from old.is_approved
            or new.email is distinct from old.email
+           or new.display_name is distinct from old.display_name
+           or new.created_at is distinct from old.created_at
            or new.id is distinct from old.id then
-            raise exception 'Permission denied: only OWNER may modify role or approval status'
+            raise exception 'Permission denied: only an approved OWNER may modify profile identity, role, or approval'
                 using errcode = '42501';
         end if;
     end if;
@@ -196,6 +289,12 @@ alter table public.user_profiles force row level security;
 alter table public.omni_sync_records enable row level security;
 alter table public.omni_sync_records force row level security;
 
+revoke all on public.user_profiles from anon, public, authenticated;
+grant select, update, delete on public.user_profiles to authenticated;
+
+revoke all on public.omni_sync_records from anon, public, authenticated;
+grant select, insert, update, delete on public.omni_sync_records to authenticated;
+
 -- Drop existing policies for idempotent re-execution
 drop policy if exists "user_profiles_select_self_or_owner" on public.user_profiles;
 drop policy if exists "user_profiles_update_owner_admin" on public.user_profiles;
@@ -241,6 +340,7 @@ create policy "user_profiles_update_self_device_only"
     using (auth.uid() = id)
     with check (
         auth.uid() = id
+        and public.is_approved_user()
         and role = public.get_my_role()
         and is_approved = public.is_approved_user()
     );
@@ -338,7 +438,7 @@ create table if not exists public.user_api_credentials (
 alter table public.user_api_credentials enable row level security;
 alter table public.user_api_credentials force row level security;
 
-revoke all on public.user_api_credentials from anon, public;
+revoke all on public.user_api_credentials from anon, public, authenticated;
 grant select, insert, update, delete on public.user_api_credentials to authenticated;
 
 drop policy if exists "user_api_credentials_select_self" on public.user_api_credentials;
@@ -348,14 +448,34 @@ drop policy if exists "user_api_credentials_delete_self" on public.user_api_cred
 
 create policy "user_api_credentials_select_self"
     on public.user_api_credentials for select to authenticated
-    using (auth.uid() = user_id);
+    using (
+        auth.uid() = user_id
+        and public.is_approved_user()
+        and public.get_my_role() = 'OWNER'
+    );
 create policy "user_api_credentials_insert_self"
     on public.user_api_credentials for insert to authenticated
-    with check (auth.uid() = user_id);
+    with check (
+        auth.uid() = user_id
+        and public.is_approved_user()
+        and public.get_my_role() = 'OWNER'
+    );
 create policy "user_api_credentials_update_self"
     on public.user_api_credentials for update to authenticated
-    using (auth.uid() = user_id)
-    with check (auth.uid() = user_id);
+    using (
+        auth.uid() = user_id
+        and public.is_approved_user()
+        and public.get_my_role() = 'OWNER'
+    )
+    with check (
+        auth.uid() = user_id
+        and public.is_approved_user()
+        and public.get_my_role() = 'OWNER'
+    );
 create policy "user_api_credentials_delete_self"
     on public.user_api_credentials for delete to authenticated
-    using (auth.uid() = user_id);
+    using (
+        auth.uid() = user_id
+        and public.is_approved_user()
+        and public.get_my_role() = 'OWNER'
+    );

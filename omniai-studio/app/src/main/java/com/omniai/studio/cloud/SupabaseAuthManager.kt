@@ -64,7 +64,7 @@ data class CloudSessionState(
 /**
  * Pure OkHttp3 Supabase Google OAuth 2.0 PKCE + Server-Enforced RBAC Session Manager.
  * - Uses standard system browser (Intent.ACTION_VIEW) — ZERO Chrome Custom Tabs, ZERO Firebase/Play Services SDKs.
- * - Stores SUPABASE_URL, SUPABASE_ANON_KEY, JWTs, email, role, and PKCE verifier in EncryptedSharedPreferences.
+ * - Uses the build-bundled Supabase URL/anon key; stores JWTs, email, role, and PKCE verifier encrypted.
  */
 class SupabaseAuthManager(
     private val vault: VaultManager,
@@ -93,6 +93,11 @@ class SupabaseAuthManager(
     val sessionState: StateFlow<CloudSessionState> = _sessionState.asStateFlow()
 
     init {
+        if (isConfigured() && vault.cloudAccessToken.isNotBlank() && !vault.cloudOfflineLocalMode) {
+            vault.cloudUserRole = "PENDING"
+            vault.cloudIsApproved = false
+            refreshLocalSessionSnapshot()
+        }
         roleGuard.updateRole(_sessionState.value.role)
     }
 
@@ -123,7 +128,7 @@ class SupabaseAuthManager(
     private fun buildSessionFromVault(): CloudSessionState {
         val configured = isConfigured()
         val hasToken = vault.cloudAccessToken.isNotBlank() && vault.cloudRefreshToken.isNotBlank()
-        val offline = vault.cloudOfflineLocalMode || !hasToken
+        val offline = vault.cloudOfflineLocalMode || !hasToken || !configured
         val resolvedRole = if (offline) {
             CloudUserRole.OFFLINE_LOCAL
         } else {
@@ -134,7 +139,7 @@ class SupabaseAuthManager(
             )
         }
         val status = when {
-            !configured && offline -> "Offline Local Mode (Configure Supabase URL & Anon Key to sync)"
+            !configured && offline -> "Offline Local Mode (Supabase is not configured in this build)"
             offline -> "Offline Local Mode (Sign in with Google to sync)"
             resolvedRole == CloudUserRole.PENDING -> "Signed in as ${vault.cloudUserEmail} — Awaiting Owner Approval"
             else -> "Signed in as ${vault.cloudUserEmail} (${resolvedRole.badgeText})"
@@ -184,10 +189,10 @@ class SupabaseAuthManager(
     fun startGoogleSignIn(context: Context): Result<String> {
         val baseUrl = normalizedBaseUrl()
         if (!baseUrl.startsWith("https://")) {
-            return Result.failure(IllegalStateException("Configure a valid https:// SUPABASE_URL in Vault or Cloud DB settings first."))
+            return Result.failure(IllegalStateException("Supabase is not configured in this build."))
         }
         if (vault.supabaseAnonKey.isBlank()) {
-            return Result.failure(IllegalStateException("Configure SUPABASE_ANON_KEY before signing in."))
+            return Result.failure(IllegalStateException("Supabase is not configured in this build."))
         }
 
         val verifier = generateCodeVerifier()
@@ -275,11 +280,14 @@ class SupabaseAuthManager(
 
             persistTokenResponse(tokenObj)
             vault.cloudOfflineLocalMode = false
+            vault.cloudUserRole = "PENDING"
+            vault.cloudIsApproved = false
 
-            // Fetch RBAC profile and record device heartbeat
+            ensureOwnProfileInternal(vault.cloudAccessToken, vault.cloudUserId)
             val profile = fetchOwnProfileInternal(vault.cloudAccessToken, vault.cloudUserId)
-            if (profile != null) {
-                applyProfileToVault(profile)
+                ?: throw IllegalStateException("Supabase did not return this account's user_profiles row.")
+            applyProfileToVault(profile)
+            if (profile.isApproved) {
                 updateOwnDeviceHeartbeatInternal(vault.cloudAccessToken, vault.cloudUserId)
             }
 
@@ -287,6 +295,7 @@ class SupabaseAuthManager(
             Result.success(updated)
         } catch (ex: Exception) {
             vault.cloudPkceVerifier = ""
+            refreshLocalSessionSnapshot()
             Result.failure(ex)
         }
     }
@@ -342,21 +351,28 @@ class SupabaseAuthManager(
      * Re-fetches the signed-in user's role & approval status from Supabase `user_profiles`.
      */
     suspend fun refreshProfileStatus(): Result<CloudSessionState> = withContext(Dispatchers.IO) {
-        val token = ensureValidAccessToken().getOrElse { return@withContext Result.failure(it) }
+        val token = ensureValidAccessToken().getOrElse {
+            markProfileUnverified()
+            return@withContext Result.failure(it)
+        }
         val userId = vault.cloudUserId
         if (userId.isBlank()) {
+            markProfileUnverified()
             return@withContext Result.failure(IllegalStateException("Missing cloud user ID; please sign in again."))
         }
         try {
+            ensureOwnProfileInternal(token, userId)
             val profile = fetchOwnProfileInternal(token, userId)
-                ?: return@withContext Result.failure(
-                    IllegalStateException("Profile row not found in public.user_profiles. Ensure supabase/schema_and_rls.sql was executed.")
-                )
+                ?: run {
+                    markProfileUnverified()
+                    return@withContext Result.failure(IllegalStateException("Supabase did not return this account's user_profiles row."))
+                }
             applyProfileToVault(profile)
-            updateOwnDeviceHeartbeatInternal(token, userId)
+            if (profile.isApproved) updateOwnDeviceHeartbeatInternal(token, userId)
             val updated = refreshLocalSessionSnapshot()
             Result.success(updated)
         } catch (ex: Exception) {
+            markProfileUnverified()
             Result.failure(ex)
         }
     }
@@ -366,17 +382,16 @@ class SupabaseAuthManager(
      * Server-side RLS rejects non-OWNER callers even if called directly.
      */
     suspend fun listAllUserProfiles(): Result<List<CloudUserProfile>> = withContext(Dispatchers.IO) {
+        val verifiedSession = refreshProfileStatus().getOrElse { return@withContext Result.failure(it) }
         val deny = roleGuard.denyReasonForAdmin()
-        if (deny != null) return@withContext Result.failure(IllegalStateException(deny))
-
+        if (!verifiedSession.isApproved || deny != null) {
+            return@withContext Result.failure(IllegalStateException(deny ?: "Approved OWNER role required."))
+        }
         val token = ensureValidAccessToken().getOrElse { return@withContext Result.failure(it) }
-        val baseUrl = normalizedBaseUrl()
-        val anonKey = vault.supabaseAnonKey.trim()
-
         try {
             val req = Request.Builder()
-                .url("$baseUrl/rest/v1/user_profiles?select=*&order=created_at.asc")
-                .header("apikey", anonKey)
+                .url("${normalizedBaseUrl()}/rest/v1/user_profiles?select=*&order=created_at.asc")
+                .header("apikey", vault.supabaseAnonKey.trim())
                 .header("Authorization", "Bearer $token")
                 .header("Accept", "application/json")
                 .get()
@@ -403,28 +418,27 @@ class SupabaseAuthManager(
         newRole: String,
         isApproved: Boolean
     ): Result<CloudUserProfile> = withContext(Dispatchers.IO) {
-        val deny = roleGuard.denyReasonForAdmin()
-        if (deny != null) return@withContext Result.failure(IllegalStateException(deny))
-
         val normalizedRole = newRole.uppercase(Locale.US).trim()
-        if (normalizedRole !in setOf("OWNER", "EDITOR", "VIEWER", "PENDING")) {
+        if (normalizedRole !in setOf("EDITOR", "VIEWER", "PENDING")) {
             return@withContext Result.failure(IllegalArgumentException("Invalid role '$newRole'"))
         }
 
+        val verifiedSession = refreshProfileStatus().getOrElse { return@withContext Result.failure(it) }
+        val deny = roleGuard.denyReasonForAdmin()
+        if (!verifiedSession.isApproved || deny != null) {
+            return@withContext Result.failure(IllegalStateException(deny ?: "Approved OWNER role required."))
+        }
         val token = ensureValidAccessToken().getOrElse { return@withContext Result.failure(it) }
-        val baseUrl = normalizedBaseUrl()
-        val anonKey = vault.supabaseAnonKey.trim()
-        val encodedId = URLEncoder.encode(targetUserId, StandardCharsets.UTF_8.name())
-
         try {
+            val encodedId = URLEncoder.encode(targetUserId, StandardCharsets.UTF_8.name())
             val payload = buildJsonObject {
                 put("role", normalizedRole)
                 put("is_approved", if (normalizedRole == "PENDING") false else isApproved)
             }.toString()
 
             val req = Request.Builder()
-                .url("$baseUrl/rest/v1/user_profiles?id=eq.$encodedId")
-                .header("apikey", anonKey)
+                .url("${normalizedBaseUrl()}/rest/v1/user_profiles?id=eq.$encodedId")
+                .header("apikey", vault.supabaseAnonKey.trim())
                 .header("Authorization", "Bearer $token")
                 .header("Content-Type", "application/json")
                 .header("Prefer", "return=representation")
@@ -531,6 +545,26 @@ class SupabaseAuthManager(
         }
     }
 
+    private fun ensureOwnProfileInternal(accessToken: String, userId: String) {
+        if (userId.isBlank()) {
+            throw IllegalStateException("Missing cloud user ID; please sign in again.")
+        }
+        val request = Request.Builder()
+            .url("${normalizedBaseUrl()}/rest/v1/rpc/ensure_user_profile")
+            .header("apikey", vault.supabaseAnonKey.trim())
+            .header("Authorization", "Bearer $accessToken")
+            .header("Content-Type", "application/json")
+            .post("{}".toRequestBody(JSON_MEDIA_TYPE))
+            .build()
+
+        client.newCall(request).execute().use { response ->
+            val body = response.body?.string().orEmpty()
+            if (!response.isSuccessful) {
+                throw IllegalStateException("Could not verify or create user_profiles row (HTTP ${response.code}): ${body.take(180)}")
+            }
+        }
+    }
+
     private fun updateOwnDeviceHeartbeatInternal(accessToken: String, userId: String) {
         val baseUrl = normalizedBaseUrl()
         val anonKey = vault.supabaseAnonKey.trim()
@@ -562,5 +596,11 @@ class SupabaseAuthManager(
         vault.cloudIsApproved = profile.isApproved
         if (profile.email.isNotBlank()) vault.cloudUserEmail = profile.email
         if (!profile.displayName.isNullOrBlank()) vault.cloudUserDisplayName = profile.displayName
+    }
+
+    private fun markProfileUnverified() {
+        vault.cloudUserRole = "PENDING"
+        vault.cloudIsApproved = false
+        refreshLocalSessionSnapshot()
     }
 }
