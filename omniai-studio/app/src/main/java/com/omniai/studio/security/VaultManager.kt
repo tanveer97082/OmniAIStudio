@@ -452,8 +452,6 @@ class VaultManager(context: Context) {
         kaggleApiKey = kaggleApiKey,
         kaggleDatasetSlug = kaggleDatasetSlug,
         kaggleKernelSlug = kaggleKernelSlug,
-        kaggleAccountPool = getKaggleAccountPool(),
-        activeKaggleAccountId = activeKaggleAccountId,
         githubRepo = githubRepo,
         githubToken = githubToken,
         telegramBotToken = telegramBotToken,

@@ -1636,7 +1636,7 @@ class OmniAiViewModel(application: Application) : AndroidViewModel(application) 
                 if (trendDiscoveryGeneration.get() != generation) {
                     throw CancellationException("Trend search is no longer active.")
                 }
-                val report = json.decodeFromString<TrendDiscoveryReport>(extractJsonObject(raw))
+                val report = json.decodeFromString<TrendDiscoveryReport>(aiClient.extractJsonObject(raw))
                 _trendDiscoveryReport.value = report
                 postToast("Trend search complete for ${niche.name}.")
             } catch (cancelled: CancellationException) {
