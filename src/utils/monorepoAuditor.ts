@@ -1396,14 +1396,14 @@ export function auditMonorepo(files: RepoFile[]): AuditCheck[] {
     {
       id: 'prebuild-ci-manifest-zero-aapt-risks',
       group: 'CI/CD Automation',
-      label: 'Pre-Build Audit: Zero ./gradlew Trap · Zero AAPT Resource Risks · API 29+ SDK Guards',
-      expected: 'setup-gradle@v3 (8.5) with direct gradle commands, allowBackup=false without fullBackupContent, zero @mipmap/ic_launcher, guarded currentThermalStatus',
+      label: 'Pre-Build Audit: Gradle Wrapper · Zero AAPT Resource Risks · API 29+ SDK Guards',
+      expected: 'setup-gradle@v4 (8.5) with ./gradlew wrapper commands, allowBackup=false without fullBackupContent, zero @mipmap/ic_launcher, guarded currentThermalStatus',
       passed:
-        !apkWorkflow.includes('./gradlew') &&
-        apkWorkflow.includes('gradle/actions/setup-gradle@v3') &&
+        apkWorkflow.includes('./gradlew') &&
+        apkWorkflow.includes('gradle/actions/setup-gradle@v4') &&
         apkWorkflow.includes("gradle-version: '8.5'") &&
-        apkWorkflow.includes('gradle assembleRelease') &&
-        apkWorkflow.includes('gradle assembleDebug') &&
+        apkWorkflow.includes('./gradlew assembleRelease') &&
+        apkWorkflow.includes('./gradlew assembleDebug') &&
         manifest.includes('android:allowBackup="false"') &&
         !manifest.includes('android:fullBackupContent') &&
         !/@mipmap\/ic_launcher(?=["\s])/.test(manifest) &&

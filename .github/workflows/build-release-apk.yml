@@ -1,0 +1,122 @@
+name: Build & Release OmniAI-Studio APK
+
+on:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - 'kaggle_worker/**'
+      - 'README.md'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-apk:
+    name: Build Versioned APK (AGP 8.2.2 / JDK 17)
+    runs-on: ubuntu-latest
+
+    env:
+      VERSION_CODE: ${{ github.run_number }}
+      VERSION_NAME: 5.5.${{ github.run_number }}
+
+    steps:
+      - name: Checkout Monorepo
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17 (Temurin)
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Set up Gradle 8.5
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.5'
+
+      - name: Configure Optional Release Keystore
+        id: signing
+        working-directory: ./omniai-studio
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASS: ${{ secrets.KEYSTORE_PASS }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASS: ${{ secrets.KEY_PASS }}
+        run: |
+          if [[ -n "$KEYSTORE_BASE64" && -n "$KEYSTORE_PASS" && -n "$KEY_ALIAS" && -n "$KEY_PASS" ]]; then
+            echo "$KEYSTORE_BASE64" | base64 --decode > app/release-keystore.jks
+            echo "signed=true" >> "$GITHUB_OUTPUT"
+            echo "Release keystore decoded successfully. Building signed release APK."
+          else
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+            echo "Release signing secrets not configured. Falling back to assembleDebug."
+          fi
+
+      - name: Build Signed Release APK
+        if: steps.signing.outputs.signed == 'true'
+        working-directory: ./omniai-studio
+        env:
+          KEYSTORE_PATH: app/release-keystore.jks
+          KEYSTORE_PASS: ${{ secrets.KEYSTORE_PASS }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASS: ${{ secrets.KEY_PASS }}
+        run: |
+          chmod +x ./gradlew
+          ./gradlew assembleRelease \
+            -PVERSION_CODE=${VERSION_CODE} \
+            -PVERSION_NAME=${VERSION_NAME} \
+            --no-daemon --stacktrace
+          cp app/build/outputs/apk/release/app-release.apk "../../OmniAI-Studio-v${VERSION_NAME}.apk"
+
+      - name: Build Debug APK (Fallback)
+        if: steps.signing.outputs.signed != 'true'
+        working-directory: ./omniai-studio
+        run: |
+          chmod +x ./gradlew
+          ./gradlew assembleDebug \
+            -PVERSION_CODE=${VERSION_CODE} \
+            -PVERSION_NAME=${VERSION_NAME} \
+            --no-daemon --stacktrace
+          cp app/build/outputs/apk/debug/app-debug.apk "../../OmniAI-Studio-v${VERSION_NAME}.apk"
+
+      - name: Compute APK SHA-256 Checksum
+        run: |
+          sha256sum "OmniAI-Studio-v${VERSION_NAME}.apk" > "OmniAI-Studio-v${VERSION_NAME}.apk.sha256"
+          cat "OmniAI-Studio-v${VERSION_NAME}.apk.sha256"
+
+      - name: Upload APK Build Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: OmniAI-Studio-v${{ env.VERSION_NAME }}
+          path: |
+            OmniAI-Studio-v${{ env.VERSION_NAME }}.apk
+            OmniAI-Studio-v${{ env.VERSION_NAME }}.apk.sha256
+          retention-days: 30
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ env.VERSION_NAME }}
+          name: OmniAI-Studio v${{ env.VERSION_NAME }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          body: |
+            Automated build for **OmniAI-Studio v${{ env.VERSION_NAME }}** (versionCode `${{ env.VERSION_CODE }}`).
+
+            - Build Variant: `${{ steps.signing.outputs.signed == 'true' && 'Signed Release' || 'Debug Fallback' }}`
+            - Compile / Target SDK: Android 14 (API 34), Min SDK: API 26
+            - On-Device Video Engine: AndroidX Media3 Transformer 1.2.1 + Kaggle Wan 2.1 Seamless Loop
+            - v5.5 Cloud DB & RBAC: Pure OkHttp3 Supabase PostgreSQL GZIP Text-Only Delta Sync, Google OAuth 2.0 PKCE + Server-Enforced RLS Roles (`OWNER`/`EDITOR`/`VIEWER`/`PENDING`), Multi-Device Sync & Anti-Pause Cron
+            - v5.4 Native Adobe Bridge: Direct installed Adobe Express & Firefly native app intents (zero WebView/Custom Tabs) + MediaMetadataRetriever frame handoff + ON_RESUME return import
+            - v5.3 Creator Publishing Suite: Pure OkHttp3 YouTube Data API v3 Multi-Channel Auto-Uploader (2 MB chunked resumable upload + thumbnail + first comment + 10,000-unit daily quota meter), Direct Kaggle-to-YouTube & Meta FB/IG Reels Worker, On-Device Viral Thumbnail Studio, Closed-Loop Analytics, AI Comment Reply Assistant, and PolicyComplianceScanner
+            - v5.2 Guides & 2 GB Direct Upload: Embedded platform-specific ? Setup Guide & Commands sheets + Headless Kaggle-to-Telegram 2 GB MTProto Uploader + Save Mobile Data mode
+            - v5.1 UI/UX: AMOLED Design Tokens (#09090C / #13131A / #1B1B25), Hub-and-Spoke 4-Tab Bar + Slide-Out Drawer, Home Bento Command Dashboard, Chat Zen Focus Mode, 3-Step Video Studio, Sticky Git Auto-Push Pill & Full-Screen Code Editor
+            - v5.0 Resilience Engine: AI Build Doctor, Pre-Push Secret Leak Scanner, Line-by-Line Diff Review Dialog, Zero-Dep Local Wi-Fi LAN Web Studio (6-digit PIN), HTTP Range Resumable Download Manager, Multi-Key API Pool with 429 Cooldown Rotation, Device Thermal/RAM/Storage Health Guard, and Network-Reconnect OutboxFlushWorker
+            - v4.5 Engine: Project Management System (Kanban + Code Editor + AI ### FILE Splitter), Zero-Dependency Atomic GitHub Git Data API Push/Pull, Live GitHub Actions Build Monitor & 1-Tap OTA APK Installer
+            - Security: AES-256-GCM Vault, BiometricPrompt, FLAG_SECURE, PBKDF2 Encrypted Backups (Room DB v10)
+          files: |
+            OmniAI-Studio-v${{ env.VERSION_NAME }}.apk
+            OmniAI-Studio-v${{ env.VERSION_NAME }}.apk.sha256

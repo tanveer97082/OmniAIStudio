@@ -32,12 +32,13 @@ jobs:
           java-version: '17'
 
       - name: Set up Gradle 8.5
-        uses: gradle/actions/setup-gradle@v3
+        uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.5'
 
       - name: Configure Optional Release Keystore
         id: signing
+        working-directory: ./omniai-studio
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
           KEYSTORE_PASS: ${{ secrets.KEYSTORE_PASS }}
@@ -55,26 +56,30 @@ jobs:
 
       - name: Build Signed Release APK
         if: steps.signing.outputs.signed == 'true'
+        working-directory: ./omniai-studio
         env:
-          KEYSTORE_PATH: release-keystore.jks
+          KEYSTORE_PATH: app/release-keystore.jks
           KEYSTORE_PASS: ${{ secrets.KEYSTORE_PASS }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASS: ${{ secrets.KEY_PASS }}
         run: |
-          gradle assembleRelease \
+          chmod +x ./gradlew
+          ./gradlew assembleRelease \
             -PVERSION_CODE=${VERSION_CODE} \
             -PVERSION_NAME=${VERSION_NAME} \
             --no-daemon --stacktrace
-          cp app/build/outputs/apk/release/app-release.apk "OmniAI-Studio-v${VERSION_NAME}.apk"
+          cp app/build/outputs/apk/release/app-release.apk "../../OmniAI-Studio-v${VERSION_NAME}.apk"
 
       - name: Build Debug APK (Fallback)
         if: steps.signing.outputs.signed != 'true'
+        working-directory: ./omniai-studio
         run: |
-          gradle assembleDebug \
+          chmod +x ./gradlew
+          ./gradlew assembleDebug \
             -PVERSION_CODE=${VERSION_CODE} \
             -PVERSION_NAME=${VERSION_NAME} \
             --no-daemon --stacktrace
-          cp app/build/outputs/apk/debug/app-debug.apk "OmniAI-Studio-v${VERSION_NAME}.apk"
+          cp app/build/outputs/apk/debug/app-debug.apk "../../OmniAI-Studio-v${VERSION_NAME}.apk"
 
       - name: Compute APK SHA-256 Checksum
         run: |
