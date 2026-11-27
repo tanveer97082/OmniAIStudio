@@ -68,7 +68,6 @@ jobs:
             -PVERSION_CODE=${VERSION_CODE} \
             -PVERSION_NAME=${VERSION_NAME} \
             --no-daemon --stacktrace
-          cp app/build/outputs/apk/release/app-release.apk "../../OmniAI-Studio-v${VERSION_NAME}.apk"
 
       - name: Build Debug APK (Fallback)
         if: steps.signing.outputs.signed != 'true'
@@ -79,12 +78,33 @@ jobs:
             -PVERSION_CODE=${VERSION_CODE} \
             -PVERSION_NAME=${VERSION_NAME} \
             --no-daemon --stacktrace
-          cp app/build/outputs/apk/debug/app-debug.apk "../../OmniAI-Studio-v${VERSION_NAME}.apk"
+
+      - name: Stage APK for Checksum and Release
+        env:
+          APK_VARIANT: ${{ steps.signing.outputs.signed == 'true' && 'release' || 'debug' }}
+        run: |
+          if [[ "$APK_VARIANT" == "release" ]]; then
+            apk_source="omniai-studio/app/build/outputs/apk/release/app-release.apk"
+          else
+            apk_source="omniai-studio/app/build/outputs/apk/debug/app-debug.apk"
+          fi
+          apk_target="OmniAI-Studio-v${VERSION_NAME}.apk"
+          if [[ ! -f "$apk_source" ]]; then
+            echo "::error::APK was not produced at expected path: $apk_source"
+            exit 1
+          fi
+          cp "$apk_source" "$apk_target"
+          echo "Staged APK: $apk_source -> $apk_target"
 
       - name: Compute APK SHA-256 Checksum
         run: |
-          sha256sum "OmniAI-Studio-v${VERSION_NAME}.apk" > "OmniAI-Studio-v${VERSION_NAME}.apk.sha256"
-          cat "OmniAI-Studio-v${VERSION_NAME}.apk.sha256"
+          apk_file="OmniAI-Studio-v${VERSION_NAME}.apk"
+          if [[ ! -f "$apk_file" ]]; then
+            echo "::error::Cannot compute SHA-256: APK file '$apk_file' does not exist."
+            exit 1
+          fi
+          sha256sum "$apk_file" > "$apk_file.sha256"
+          cat "$apk_file.sha256"
 
       - name: Upload APK Build Artifact
         uses: actions/upload-artifact@v4
