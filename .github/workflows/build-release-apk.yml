@@ -56,9 +56,9 @@ jobs:
           KEYSTORE_PASS: ${{ secrets.KEYSTORE_PASS }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASS: ${{ secrets.KEY_PASS }}
-          SUPABASE_URL: https://sdsdsxqcujkuozuomqwt.supabase.co
-          SUPABASE_ANON_KEY: sb_publishable_2PEC-jz7RNS_2junHMYRZQ_QPWfauyn
-        run: |
+        SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          run: |
           chmod +x ./gradlew
           ./gradlew assembleDebug assembleRelease \
             -PVERSION_CODE=${VERSION_CODE} \
